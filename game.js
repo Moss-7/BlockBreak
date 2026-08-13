@@ -62,21 +62,27 @@
   const PIECES = [];
   BASE_SHAPES.forEach((shape) => {
     const seen = new Set();
+    const variants = [];
     let cells = normalize(parseCells(shape.cells));
     for (let i = 0; i < 4; i++) {
       const k = key(cells);
       if (!seen.has(k)) {
         seen.add(k);
-        PIECES.push({
-          cells,
-          color: shape.color,
-          weight: shape.weight,
-          rows: Math.max(...cells.map(([r]) => r)) + 1,
-          cols: Math.max(...cells.map(([, c]) => c)) + 1,
-        });
+        variants.push(cells);
       }
       cells = rotate(cells);
     }
+    // weight は「基本形の出やすさ」。回転の種類数で割っておかないと、
+    // 回転が多い形ほど実際の出現率が高くなってしまう。
+    variants.forEach((variant) => {
+      PIECES.push({
+        cells: variant,
+        color: shape.color,
+        weight: shape.weight / variants.length,
+        rows: Math.max(...variant.map(([r]) => r)) + 1,
+        cols: Math.max(...variant.map(([, c]) => c)) + 1,
+      });
+    });
   });
 
   const TOTAL_WEIGHT = PIECES.reduce((sum, p) => sum + p.weight, 0);
@@ -122,7 +128,11 @@
     combo: 0,        // 連続でライン消去した回数
     over: false,
     busy: false,     // ライン消去の演出中は入力を受け付けない
+    beatBest: false, // このゲーム中に自己ベストを更新したか
   };
+
+  // キーボード操作の状態（選択中のピースと盤面カーソル）
+  const kb = { index: null, row: 0, col: 0 };
 
   let clearTimer = null;   // 消去演出の後始末を予約したタイマー
 
@@ -142,7 +152,13 @@
     panelSub: document.getElementById('panel-sub'),
     soundBtn: document.getElementById('sound-btn'),
     soundIcon: document.getElementById('sound-icon'),
+    status: document.getElementById('status'),
   };
+
+  /** スクリーンリーダー向けに状況を読み上げる。 */
+  function announce(text) {
+    el.status.textContent = text;
+  }
 
   const cellEls = [];
 
@@ -152,13 +168,19 @@
     cellEls.length = 0;
     for (let r = 0; r < SIZE; r++) {
       cellEls[r] = [];
+      // role="grid" の子は role="row" である必要があるため、行を包む。
+      const rowEl = document.createElement('div');
+      rowEl.className = 'row';
+      rowEl.setAttribute('role', 'row');
       for (let c = 0; c < SIZE; c++) {
         const cell = document.createElement('div');
         cell.className = 'cell';
+        cell.id = `cell-${r}-${c}`;
         cell.setAttribute('role', 'gridcell');
-        el.board.appendChild(cell);
+        rowEl.appendChild(cell);
         cellEls[r][c] = cell;
       }
+      el.board.appendChild(rowEl);
     }
   }
 
@@ -227,6 +249,7 @@
           cell.classList.remove('filled');
           cell.style.removeProperty('--c');
         }
+        cell.setAttribute('aria-label', `${r + 1}行${c + 1}列 ${color ? 'ブロック' : '空'}`);
       }
     }
   }
@@ -277,6 +300,9 @@
       cell.classList.add('preview');
     }
   }
+
+  const describePiece = (piece) =>
+    `${piece.cells.length}マス たて${piece.rows}×よこ${piece.cols}`;
 
   /** ピース DOM を生成する（cellSize は 1 マスの px）。 */
   function buildPieceEl(piece, cellSize, className) {
@@ -330,7 +356,16 @@
       ));
       const pieceEl = buildPieceEl(piece, cellSize, 'piece');
       pieceEl.dataset.index = String(index);
-      if (!hasAnyPlacement(piece)) pieceEl.classList.add('dead');
+      const placeable = hasAnyPlacement(piece);
+      if (!placeable) pieceEl.classList.add('dead');
+
+      // キーボードでも掴めるようにする。
+      pieceEl.tabIndex = 0;
+      pieceEl.setAttribute('role', 'button');
+      pieceEl.setAttribute('aria-label',
+        `ピース${index + 1}: ${describePiece(piece)}${placeable ? '' : '、置ける場所なし'}`);
+      if (kb.index === index) pieceEl.classList.add('selected');
+
       holders[index].appendChild(pieceEl);
     });
   }
@@ -404,9 +439,9 @@
    * トレイの中身が食い違っていたら（ドラッグ中にリスタートされた等）配置しない。 */
   function placePiece(index, piece, row, col) {
     const slot = state.tray[index];
-    if (state.over || state.busy) return;
-    if (!slot || slot.used || slot.piece !== piece) return;
-    if (!canPlaceAt(piece, row, col)) return;
+    if (state.over || state.busy) return false;
+    if (!slot || slot.used || slot.piece !== piece) return false;
+    if (!canPlaceAt(piece, row, col)) return false;
 
     for (const [dr, dc] of piece.cells) {
       state.grid[row + dr][col + dc] = piece.color;
@@ -424,10 +459,13 @@
     const lineCount = rows.length + cols.length;
     if (lineCount > 0) {
       clearLines(rows, cols, lineCount, row, col);
+      announce(`${row + 1}行${col + 1}列に配置。${lineCount}ライン消去。スコア ${state.score} 点。`);
     } else {
       state.combo = 0;
       finishTurn();
+      announce(`${row + 1}行${col + 1}列に配置。スコア ${state.score} 点。`);
     }
+    return true;
   }
 
   function clearLines(rows, cols, lineCount, anchorRow, anchorCol) {
@@ -494,6 +532,7 @@
     state.score += points;
     if (state.score > state.best) {
       state.best = state.score;
+      state.beatBest = true;
       store.set(STORAGE_KEY, String(state.best));
     }
     renderScore(animate);
@@ -528,10 +567,12 @@
     el.finalScore.textContent = String(state.score);
     el.finalBest.textContent = String(state.best);
     el.panelTitle.textContent = 'GAME OVER';
-    el.panelSub.textContent = state.score >= state.best && state.score > 0
+    el.panelSub.textContent = state.beatBest
       ? '自己ベスト更新！'
       : '置ける場所がなくなりました';
+    announce(`ゲームオーバー。スコア ${state.score} 点。`);
     el.overlay.hidden = false;
+    document.getElementById('play-again').focus();
     sound.play(220, 0.3, 'sawtooth', 0.05);
     setTimeout(() => sound.play(160, 0.4, 'sawtooth', 0.05), 160);
   }
@@ -552,6 +593,7 @@
     if (!slot || slot.used) return;
 
     event.preventDefault();
+    deselectPiece(false);   // キーボードで選択中のカーソルと二重に出さない
 
     const metrics = boardMetrics();
     const ghost = buildPieceEl(slot.piece, metrics.size, 'drag-piece');
@@ -633,6 +675,140 @@
   }
 
   /* ------------------------------------------------------------------ *
+   * キーボード操作
+   *   トレイでピースを選び、矢印キーで盤面のカーソルを動かして Enter で置く。
+   * ------------------------------------------------------------------ */
+
+  /** そのピースが最初に置ける位置。置ける場所がなければ null。 */
+  function firstPlacement(piece) {
+    for (let r = 0; r <= SIZE - piece.rows; r++) {
+      for (let c = 0; c <= SIZE - piece.cols; c++) {
+        if (canPlaceAt(piece, r, c)) return { row: r, col: c };
+      }
+    }
+    return null;
+  }
+
+  function renderCursor() {
+    for (let r = 0; r < SIZE; r++) {
+      for (let c = 0; c < SIZE; c++) cellEls[r][c].classList.remove('cursor');
+    }
+    if (kb.index === null) {
+      el.board.removeAttribute('aria-activedescendant');
+      clearPreview();
+      return;
+    }
+    const piece = state.tray[kb.index].piece;
+    showPreview(piece, kb.row, kb.col);
+    cellEls[kb.row][kb.col].classList.add('cursor');
+    el.board.setAttribute('aria-activedescendant', cellEls[kb.row][kb.col].id);
+  }
+
+  function selectPiece(index) {
+    if (state.over || state.busy) return;
+    const slot = state.tray[index];
+    if (!slot || slot.used) return;
+
+    kb.index = index;
+    const spot = firstPlacement(slot.piece) || { row: 0, col: 0 };
+    kb.row = spot.row;
+    kb.col = spot.col;
+    markSelected(index);
+    renderCursor();
+    el.board.focus();
+    announce(`${describePiece(slot.piece)} を選択。${kb.row + 1}行${kb.col + 1}列。` +
+      '矢印キーで移動、Enter で配置、Escape で解除。');
+  }
+
+  /** 選択中の見た目だけを付け替える。トレイの DOM は作り直さない
+   *  （ドラッグ開始時に呼ばれるため、掴んだ要素を消してしまわないように）。 */
+  function markSelected(index) {
+    el.tray.querySelectorAll('.piece.selected')
+      .forEach((node) => node.classList.remove('selected'));
+    if (index !== null) {
+      el.tray.querySelector(`.piece[data-index="${index}"]`)?.classList.add('selected');
+    }
+  }
+
+  function deselectPiece(focusTray) {
+    if (kb.index === null) return;
+    const index = kb.index;
+    kb.index = null;
+    renderCursor();
+    markSelected(null);
+    if (focusTray) el.tray.querySelector(`.piece[data-index="${index}"]`)?.focus();
+  }
+
+  /** まだ使っていないピースのうち、置ける場所があるものを選ぶ。 */
+  function selectNextPiece() {
+    const index = state.tray.findIndex((slot) => !slot.used && hasAnyPlacement(slot.piece));
+    if (index >= 0) selectPiece(index);
+  }
+
+  function moveCursor(dr, dc) {
+    const piece = state.tray[kb.index].piece;
+    kb.row = Math.min(Math.max(kb.row + dr, 0), SIZE - piece.rows);
+    kb.col = Math.min(Math.max(kb.col + dc, 0), SIZE - piece.cols);
+    renderCursor();
+    const ok = canPlaceAt(piece, kb.row, kb.col);
+    announce(`${kb.row + 1}行${kb.col + 1}列${ok ? '' : ' 置けません'}`);
+  }
+
+  const ARROWS = {
+    ArrowUp: [-1, 0], ArrowDown: [1, 0], ArrowLeft: [0, -1], ArrowRight: [0, 1],
+  };
+
+  function onBoardKeyDown(event) {
+    if (state.over || state.busy) return;
+
+    // ピース未選択なら、まずトレイから選ぶ。
+    if (kb.index === null) {
+      if (event.key === 'Enter' || event.key === ' ' || ARROWS[event.key]) {
+        event.preventDefault();
+        selectNextPiece();
+      }
+      return;
+    }
+
+    if (ARROWS[event.key]) {
+      event.preventDefault();
+      moveCursor(...ARROWS[event.key]);
+      return;
+    }
+
+    if (event.key === 'Enter' || event.key === ' ') {
+      event.preventDefault();
+      const index = kb.index;
+      const piece = state.tray[index].piece;
+      if (placePiece(index, piece, kb.row, kb.col)) {
+        el.hint?.remove();
+        kb.index = null;
+        renderCursor();
+        // 続けて置けるよう、次のピースを自動で選ぶ（消去演出中は選べない）。
+        if (!state.over && !state.busy) selectNextPiece();
+      } else {
+        announce('ここには置けません');
+      }
+      return;
+    }
+
+    if (event.key === 'Escape') {
+      event.preventDefault();
+      deselectPiece(true);
+      announce('選択を解除しました');
+    }
+  }
+
+  function onTrayKeyDown(event) {
+    const pieceEl = event.target.closest('.piece');
+    if (!pieceEl) return;
+    if (event.key === 'Enter' || event.key === ' ') {
+      event.preventDefault();
+      selectPiece(Number(pieceEl.dataset.index));
+    }
+  }
+
+  /* ------------------------------------------------------------------ *
    * 初期化
    * ------------------------------------------------------------------ */
 
@@ -640,15 +816,18 @@
     // 進行中のドラッグと、前のゲームに予約された消去演出を破棄してから始める。
     cancelDrag();
     cancelClearAnimation();
+    kb.index = null;
     state.grid = emptyGrid();
     state.score = 0;
     state.combo = 0;
     state.over = false;
+    state.beatBest = false;
     state.tray = [];
     refillTray();
     el.overlay.hidden = true;
     renderBoard();
     renderTray();
+    renderCursor();
     renderScore(false);
   }
 
@@ -661,6 +840,8 @@
     newGame();
 
     el.tray.addEventListener('pointerdown', onPointerDown);
+    el.tray.addEventListener('keydown', onTrayKeyDown);
+    el.board.addEventListener('keydown', onBoardKeyDown);
     window.addEventListener('pointermove', onPointerMove, { passive: false });
     window.addEventListener('pointerup', onPointerUp);
     window.addEventListener('pointercancel', (event) => {
