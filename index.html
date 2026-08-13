@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+<meta name="theme-color" content="#131a3a">
+<title>BlockBreak — ブロックパズル</title>
+<link rel="stylesheet" href="style.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='22' fill='%23131a3a'/><rect x='16' y='16' width='30' height='30' rx='7' fill='%2342a5f5'/><rect x='54' y='16' width='30' height='30' rx='7' fill='%23ffca28'/><rect x='16' y='54' width='30' height='30' rx='7' fill='%23ef5350'/><rect x='54' y='54' width='30' height='30' rx='7' fill='%2366bb6a'/></svg>">
+</head>
+<body>
+  <div class="app">
+    <header class="hud">
+      <div class="stat stat--best">
+        <span class="stat__label">BEST</span>
+        <span class="stat__value" id="best">0</span>
+      </div>
+      <div class="stat stat--score">
+        <span class="stat__label">SCORE</span>
+        <span class="stat__value" id="score">0</span>
+      </div>
+      <div class="hud__actions">
+        <button class="icon-btn" id="sound-btn" type="button" title="サウンド" aria-label="サウンド切り替え">
+          <span id="sound-icon">🔊</span>
+        </button>
+        <button class="icon-btn" id="restart-btn" type="button" title="やり直す" aria-label="やり直す">↻</button>
+      </div>
+    </header>
+
+    <div class="stage">
+      <div class="combo" id="combo" aria-live="polite"></div>
+
+      <main class="board-wrap">
+        <div class="board" id="board" role="grid" aria-label="ゲーム盤"></div>
+        <div class="fx" id="fx" aria-hidden="true"></div>
+      </main>
+
+      <footer class="tray" id="tray"></footer>
+
+      <p class="hint" id="hint">ピースを盤面にドラッグして置こう</p>
+    </div>
+  </div>
+
+  <div class="drag-layer" id="drag-layer" aria-hidden="true"></div>
+
+  <div class="overlay" id="overlay" hidden>
+    <div class="panel">
+      <h1 class="panel__title" id="panel-title">GAME OVER</h1>
+      <p class="panel__sub" id="panel-sub">置ける場所がなくなりました</p>
+      <div class="panel__scores">
+        <div>
+          <span class="stat__label">SCORE</span>
+          <span class="panel__score" id="final-score">0</span>
+        </div>
+        <div>
+          <span class="stat__label">BEST</span>
+          <span class="panel__score" id="final-best">0</span>
+        </div>
+      </div>
+      <button class="primary-btn" id="play-again" type="button">もう一度あそぶ</button>
+    </div>
+  </div>
+
+  <script src="game.js"></script>
+</body>
+</html>
