@@ -134,7 +134,8 @@
   // キーボード操作の状態（選択中のピースと盤面カーソル）
   const kb = { index: null, row: 0, col: 0 };
 
-  let clearTimer = null;   // 消去演出の後始末を予約したタイマー
+  let clearTimer = null;      // 消去演出の後始末を予約したタイマー
+  let allClearTimer = null;   // 全消し演出の後始末を予約したタイマー
 
   const el = {
     board: document.getElementById('board'),
@@ -379,11 +380,12 @@
     }
   }
 
-  function showCombo(text) {
+  function showCombo(text, big) {
     el.combo.textContent = text;
     el.combo.classList.add('show');
+    el.combo.classList.toggle('big', Boolean(big));
     clearTimeout(showCombo.timer);
-    showCombo.timer = setTimeout(() => el.combo.classList.remove('show'), 1100);
+    showCombo.timer = setTimeout(() => el.combo.classList.remove('show'), big ? 1600 : 1100);
   }
 
   function popScore(points, row, col) {
@@ -504,6 +506,10 @@
       sound.play(520 + i * 110, 0.16, 'triangle', 0.05);
     }
 
+    // 盤面が空になったか（全消し）は、ここで確定している。
+    // 演出はマスが消え終わってから出したいので、後片付けと一緒に走らせる。
+    const perfect = isBoardEmpty();
+
     clearTimer = setTimeout(() => {
       clearTimer = null;
       targets.forEach((k) => {
@@ -512,6 +518,7 @@
       });
       state.busy = false;
       renderBoard();
+      if (perfect) celebrateAllClear();
       finishTurn();
     }, 260);
   }
@@ -525,6 +532,46 @@
     state.busy = false;
     for (let r = 0; r < SIZE; r++) {
       for (let c = 0; c < SIZE; c++) cellEls[r][c].classList.remove('clearing');
+    }
+    endAllClearEffect();
+  }
+
+  const isBoardEmpty = () => state.grid.every((row) => row.every((cell) => !cell));
+
+  /** 全消し（盤面が空になった）ときのご褒美演出。 */
+  function celebrateAllClear() {
+    const center = (SIZE - 1) / 2;
+    el.board.classList.add('allclear');
+    for (let r = 0; r < SIZE; r++) {
+      for (let c = 0; c < SIZE; c++) {
+        // 中心から遠いマスほど遅らせて、光が波紋状に広がるようにする。
+        const delay = Math.round(Math.hypot(r - center, c - center) * 55);
+        cellEls[r][c].style.setProperty('--delay', `${delay}ms`);
+        cellEls[r][c].classList.add('spark');
+      }
+    }
+
+    showCombo('✨ ALL CLEAR ✨', true);
+    announce('全消し！');
+    [523, 659, 784, 1047, 1319].forEach((freq, i) => {
+      setTimeout(() => sound.play(freq, 0.25, 'triangle', 0.05), i * 90);
+    });
+
+    clearTimeout(allClearTimer);
+    allClearTimer = setTimeout(endAllClearEffect, 1500);
+  }
+
+  function endAllClearEffect() {
+    if (allClearTimer !== null) {
+      clearTimeout(allClearTimer);
+      allClearTimer = null;
+    }
+    el.board.classList.remove('allclear');
+    for (let r = 0; r < SIZE; r++) {
+      for (let c = 0; c < SIZE; c++) {
+        cellEls[r][c].classList.remove('spark');
+        cellEls[r][c].style.removeProperty('--delay');
+      }
     }
   }
 
