@@ -98,7 +98,27 @@
 
   const LINES_PER_LEVEL = 10;
   const MAX_LEVEL = 10;
+
+  /* スコア。本家の攻略情報に合わせ、コンボは「加算式」にしている。
+   *   ライン 1 本 = 50 点
+   *   コンボボーナス = 20 点 + コンボが 1 つ増えるごとに +10 点
+   * 同時消しへの上乗せは置かない。まとめて消すより、
+   * 1〜2 本ずつ消してコンボを繋ぐ方が得になる。 */
+  const LINE_POINTS = 50;
+  const COMBO_BASE = 20;
+  const COMBO_STEP = 10;
   const ALL_CLEAR_BONUS = 300;
+
+  /* 配り直し。「3 つとも置ける」組み合わせを探す。
+   * 盤面が詰まっていると見つからないので、見つかった中で
+   * いちばん置ける数が多いものを使う。 */
+  const REFILL_RETRIES = 30;
+
+  /* おたすけ。低いレベルでは「いま消せるピース」を 1 つ混ぜる。
+   *   おたすけ確率 = 100% −（レベル − 1）× 10%
+   *   レベル 1 は 100%、レベル 10 は 10% */
+  const HELP_RETRIES = 20;
+  const helpChance = (level) => Math.max(0, 100 - (Math.min(level, MAX_LEVEL) - 1) * 10);
   const SMALL_AT_LEVEL_1 = 50;
   const MEDIUM_SHARE = 35;
   const SHIFT_PER_LEVEL = 4;
@@ -662,9 +682,8 @@
       cellEls[r][c].classList.add('clearing');
     });
 
-    // 1 ライン 100 点、同時消しでボーナス、コンボで倍率。
-    const base = lineCount * 100 + Math.max(0, lineCount - 1) * 50;
-    const points = base * state.combo;
+    // ライン 1 本 50 点 + コンボボーナス（20 点から 10 点ずつ増える）。
+    const points = lineCount * LINE_POINTS + COMBO_BASE + (state.combo - 1) * COMBO_STEP;
     addScore(points, true);
     popScore(points, anchorRow, anchorCol);
 
@@ -681,7 +700,7 @@
       sound.levelUp();
     } else if (lineCount >= 2 || state.combo >= 2) {
       const parts = [];
-      if (state.combo >= 2) parts.push(`COMBO ×${state.combo}`);
+      if (state.combo >= 2) parts.push(`${state.combo} COMBO!`);
       if (lineCount >= 2) parts.push(`${lineCount} LINES!`);
       showCombo(parts.join('  '));
     }
@@ -787,7 +806,23 @@
     }
   }
 
-  /** 3 つとも置けない組み合わせは避けて配り直す（理不尽な即死を減らす）。
+  /** そのピースを置いてラインを消せる場所があるか。 */
+  function canClearLine(piece) {
+    for (let r = 0; r <= SIZE - piece.rows; r++) {
+      for (let c = 0; c <= SIZE - piece.cols; c++) {
+        if (!canPlaceAt(piece, r, c)) continue;
+        const { rows, cols } = linesAfterPlacing(piece, r, c);
+        if (rows.length + cols.length > 0) return true;
+      }
+    }
+    return false;
+  }
+
+  /** 3 つを配る。
+   *  1. できるだけ「3 つとも置ける」組み合わせを選ぶ。
+   *     トレイは 3 つ使い切るまで補充されないので、置けないピースが
+   *     混じると数手後に必ず詰む。
+   *  2. レベルが低いうちは「いま消せるピース」を 1 つ混ぜる（おたすけ）。
    *  全消しの直後は「ごほうびタイム」として、ちいさいピースだけを配る。 */
   function refillTray() {
     const group = state.bonusNext ? 'small' : null;
@@ -795,11 +830,30 @@
     state.bonusNext = false;
 
     const deal = () => [randomPiece(group), randomPiece(group), randomPiece(group)];
-    const anyFits = (list) => list.some((piece) => hasAnyPlacement(piece));
+    const fitCount = (list) => list.filter((piece) => hasAnyPlacement(piece)).length;
+
     let candidate = deal();
-    for (let attempt = 0; attempt < 30 && !anyFits(candidate); attempt++) {
-      candidate = deal();
+    let fits = fitCount(candidate);
+    for (let attempt = 0; attempt < REFILL_RETRIES && fits < 3; attempt++) {
+      const next = deal();
+      const nextFits = fitCount(next);
+      if (nextFits > fits) {
+        candidate = next;
+        fits = nextFits;
+      }
     }
+
+    if (!candidate.some(canClearLine) && Math.random() * 100 < helpChance(state.level)) {
+      for (let attempt = 0; attempt < HELP_RETRIES; attempt++) {
+        const piece = randomPiece(group);
+        // 置ける数を減らさないよう、置き場所があるものだけを混ぜる。
+        if (hasAnyPlacement(piece) && canClearLine(piece)) {
+          candidate[Math.floor(Math.random() * candidate.length)] = piece;
+          break;
+        }
+      }
+    }
+
     state.tray = candidate.map((piece) => ({ piece, used: false }));
   }
 
