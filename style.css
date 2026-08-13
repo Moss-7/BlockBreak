@@ -123,10 +123,66 @@ body {
 .icon-btn:active { transform: scale(0.92); }
 .icon-btn.off { opacity: 0.45; }
 
+/* ---------- Level ---------- */
+
+.level {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 2px;
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--muted);
+}
+
+.level__name { white-space: nowrap; }
+.level__name b { color: var(--text); font-size: 15px; }
+
+.level__bar {
+  flex: 1;
+  height: 8px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.1);
+  overflow: hidden;
+}
+
+.level__fill {
+  height: 100%;
+  width: 0%;
+  border-radius: 999px;
+  background: linear-gradient(90deg, #6fe3ff, var(--accent));
+  transition: width 0.3s ease;
+}
+
+.level__next { white-space: nowrap; }
+
+/* ---------- Bonus tray ---------- */
+
+.bonus {
+  margin: 0;
+  font-size: 12px;
+  font-weight: 800;
+  color: var(--accent);
+  text-shadow: 0 2px 10px rgba(255, 210, 63, 0.45);
+  animation: bonusIn 0.3s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+.bonus[hidden] { display: none; }
+
+@keyframes bonusIn {
+  from { transform: scale(0.7); opacity: 0; }
+  to   { transform: scale(1); opacity: 1; }
+}
+
 /* ---------- Combo banner ---------- */
 
 .combo {
-  height: 22px;
+  width: 100%;
+  min-height: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   font-size: 16px;
   font-weight: 800;
   letter-spacing: 0.08em;
@@ -145,8 +201,8 @@ body {
   position: relative;
   /* 幅だけでなく高さでも上限を決める。低い画面で盤面がはみ出し、
      トレイが画面外に押し出されて操作できなくなるのを防ぐ。 */
-  width: min(94vw, 440px, calc(100vh - 250px));
-  width: min(94vw, 440px, calc(100dvh - 250px));
+  width: min(94vw, 440px, calc(100vh - 300px));
+  width: min(94vw, 440px, calc(100dvh - 300px));
   flex: 0 0 auto;
 }
 
@@ -269,8 +325,8 @@ body {
 }
 
 .combo.big {
-  font-size: 22px;
-  letter-spacing: 0.12em;
+  font-size: 20px;
+  letter-spacing: 0.1em;
 }
 
 .board.shake { animation: shake 0.3s ease; }
@@ -537,14 +593,14 @@ body {
   }
 
   .board-wrap {
-    width: min(calc(100vh - 70px), 58vw);
-    width: min(calc(100dvh - 70px), 58vw);
+    width: min(calc(100vh - 92px), 58vw);
+    width: min(calc(100dvh - 92px), 58vw);
   }
 
   .tray {
     width: min(30vw, 150px);
-    height: min(calc(100vh - 70px), 58vw);
-    height: min(calc(100dvh - 70px), 58vw);
+    height: min(calc(100vh - 92px), 58vw);
+    height: min(calc(100dvh - 92px), 58vw);
     min-height: 0;
     grid-template-columns: 1fr;
     grid-template-rows: repeat(3, 1fr);

@@ -27,6 +27,15 @@
       </div>
     </header>
 
+    <div class="level">
+      <span class="level__name">レベル <b id="level">1</b></span>
+      <div class="level__bar" id="level-bar" role="progressbar"
+           aria-label="つぎのレベルまでに消すライン" aria-valuemin="0" aria-valuemax="10" aria-valuenow="0">
+        <div class="level__fill" id="level-fill"></div>
+      </div>
+      <span class="level__next" id="level-next">つぎまで あと 10 本</span>
+    </div>
+
     <div class="stage">
       <div class="combo" id="combo" aria-live="polite"></div>
 
@@ -34,6 +43,8 @@
         <div class="board" id="board" role="grid" aria-label="ゲーム盤" tabindex="0"></div>
         <div class="fx" id="fx" aria-hidden="true"></div>
       </main>
+
+      <p class="bonus" id="bonus" hidden>🎁 ごほうびタイム！ ちいさいピースだけ</p>
 
       <footer class="tray" id="tray" role="group" aria-label="手持ちのピース"></footer>
 

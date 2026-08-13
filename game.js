@@ -85,15 +85,72 @@
     });
   });
 
-  const TOTAL_WEIGHT = PIECES.reduce((sum, p) => sum + p.weight, 0);
+  /* ------------------------------------------------------------------ *
+   * 難易度（レベル）
+   *
+   *   レベル = 消したライン ÷ 10 + 1（最大 10）
+   *   レベルが 1 上がるごとに、ちいさいピースが 4% 減って
+   *   おおきいピースが 4% 増える。ふつうのピースはいつも 35%。
+   *
+   *   レベル 1 … ちいさい 50% / ふつう 35% / おおきい 15%
+   *   レベル10 … ちいさい 14% / ふつう 35% / おおきい 51%
+   * ------------------------------------------------------------------ */
 
-  function randomPiece() {
-    let n = Math.random() * TOTAL_WEIGHT;
-    for (const piece of PIECES) {
+  const LINES_PER_LEVEL = 10;
+  const MAX_LEVEL = 10;
+  const ALL_CLEAR_BONUS = 300;
+  const SMALL_AT_LEVEL_1 = 50;
+  const MEDIUM_SHARE = 35;
+  const SHIFT_PER_LEVEL = 4;
+
+  /** ピースの大きさ区分。マス数だけで決まる。 */
+  const sizeGroup = (piece) => {
+    if (piece.cells.length <= 3) return 'small';
+    if (piece.cells.length === 4) return 'medium';
+    return 'large';
+  };
+
+  const GROUPS = { small: [], medium: [], large: [] };
+  PIECES.forEach((piece) => GROUPS[sizeGroup(piece)].push(piece));
+
+  const GROUP_WEIGHT = {};
+  for (const [name, list] of Object.entries(GROUPS)) {
+    GROUP_WEIGHT[name] = list.reduce((sum, p) => sum + p.weight, 0);
+  }
+
+  /** そのレベルでの、大きさ区分ごとの出現率（合計 100）。 */
+  function groupShares(level) {
+    const step = Math.min(level, MAX_LEVEL) - 1;
+    return {
+      small: SMALL_AT_LEVEL_1 - step * SHIFT_PER_LEVEL,
+      medium: MEDIUM_SHARE,
+      large: (100 - SMALL_AT_LEVEL_1 - MEDIUM_SHARE) + step * SHIFT_PER_LEVEL,
+    };
+  }
+
+  /** 区分の中では、これまでどおり基本形の weight どおりに選ぶ。 */
+  function pickFromGroup(name) {
+    const list = GROUPS[name];
+    let n = Math.random() * GROUP_WEIGHT[name];
+    for (const piece of list) {
       n -= piece.weight;
       if (n <= 0) return piece;
     }
-    return PIECES[PIECES.length - 1];
+    return list[list.length - 1];
+  }
+
+  /** レベルに応じた大きさの偏りでピースを 1 つ選ぶ。
+   *  group を渡すと、その区分だけから選ぶ（ごほうびタイム用）。 */
+  function randomPiece(group) {
+    if (group) return pickFromGroup(group);
+
+    const shares = groupShares(state.level);
+    let n = Math.random() * 100;
+    for (const name of ['small', 'medium', 'large']) {
+      n -= shares[name];
+      if (n <= 0) return pickFromGroup(name);
+    }
+    return pickFromGroup('large');
   }
 
   /* ------------------------------------------------------------------ *
@@ -129,6 +186,10 @@
     over: false,
     busy: false,     // ライン消去の演出中は入力を受け付けない
     beatBest: false, // このゲーム中に自己ベストを更新したか
+    lines: 0,        // 消したラインの合計
+    level: 1,
+    bonusNext: false, // 次に配る 3 つをごほうび（ちいさいピース）にする
+    bonusTray: false, // 今のトレイがごほうびで配られたものか
   };
 
   // キーボード操作の状態（選択中のピースと盤面カーソル）
@@ -154,6 +215,11 @@
     soundBtn: document.getElementById('sound-btn'),
     soundIcon: document.getElementById('sound-icon'),
     status: document.getElementById('status'),
+    level: document.getElementById('level'),
+    levelBar: document.getElementById('level-bar'),
+    levelFill: document.getElementById('level-fill'),
+    levelNext: document.getElementById('level-next'),
+    bonus: document.getElementById('bonus'),
   };
 
   /** スクリーンリーダー向けに状況を読み上げる。 */
@@ -380,6 +446,21 @@
     }
   }
 
+  function renderLevel() {
+    const maxed = state.level >= MAX_LEVEL;
+    const done = maxed ? LINES_PER_LEVEL : state.lines % LINES_PER_LEVEL;
+    el.level.textContent = String(state.level);
+    el.levelFill.style.width = `${(done / LINES_PER_LEVEL) * 100}%`;
+    el.levelBar.setAttribute('aria-valuenow', String(done));
+    el.levelNext.textContent = maxed
+      ? 'さいだいレベル'
+      : `つぎまで あと ${LINES_PER_LEVEL - done} 本`;
+  }
+
+  function renderBonus() {
+    el.bonus.hidden = !state.bonusTray;
+  }
+
   function showCombo(text, big) {
     el.combo.textContent = text;
     el.combo.classList.add('show');
@@ -404,31 +485,125 @@
    * サウンド（WebAudio の簡易ビープ）
    * ------------------------------------------------------------------ */
 
+  const TICK_INTERVAL = 30;   // 移動音を鳴らす最短間隔（ms）
+
   const sound = {
     on: store.get('blockbreak.sound') !== 'off',
     ctx: null,
-    play(freq, duration = 0.12, type = 'triangle', gain = 0.06) {
-      if (!this.on) return;
+    master: null,
+    lastTick: 0,
+
+    /** AudioContext を用意する。使えない環境では null を返す。 */
+    ready() {
+      if (!this.on) return null;
       try {
-        this.ctx = this.ctx || new (window.AudioContext || window.webkitAudioContext)();
+        if (!this.ctx) {
+          const Ctx = window.AudioContext || window.webkitAudioContext;
+          if (!Ctx) return null;
+          this.ctx = new Ctx();
+          this.master = this.ctx.createGain();
+          this.master.gain.value = 0.9;
+          this.master.connect(this.ctx.destination);
+        }
         if (this.ctx.state === 'suspended') this.ctx.resume();
-        const osc = this.ctx.createOscillator();
-        const amp = this.ctx.createGain();
+        return this.ctx;
+      } catch (_) {
+        return null;
+      }
+    },
+
+    /** 単音。立ち上がりを少し取って「プツッ」というノイズを防ぐ。
+     *  to を渡すと freq から to へ滑らせる。 */
+    tone({ freq, to, dur = 0.12, type = 'triangle', gain = 0.06, delay = 0 }) {
+      const ctx = this.ready();
+      if (!ctx) return;
+      try {
+        const t0 = ctx.currentTime + delay;
+        const osc = ctx.createOscillator();
+        const amp = ctx.createGain();
         osc.type = type;
-        osc.frequency.setValueAtTime(freq, this.ctx.currentTime);
-        amp.gain.setValueAtTime(gain, this.ctx.currentTime);
-        amp.gain.exponentialRampToValueAtTime(0.0001, this.ctx.currentTime + duration);
-        osc.connect(amp).connect(this.ctx.destination);
-        osc.start();
-        osc.stop(this.ctx.currentTime + duration);
+        osc.frequency.setValueAtTime(freq, t0);
+        if (to) osc.frequency.exponentialRampToValueAtTime(to, t0 + dur);
+        amp.gain.setValueAtTime(0.0001, t0);
+        amp.gain.exponentialRampToValueAtTime(gain, t0 + Math.min(0.012, dur / 3));
+        amp.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
+        osc.connect(amp).connect(this.master);
+        osc.start(t0);
+        osc.stop(t0 + dur + 0.02);
       } catch (_) { /* サウンド非対応環境では無視 */ }
     },
+
+    /** 音を順番に鳴らす。 */
+    seq(notes, { step = 0.09, ...opts } = {}) {
+      notes.forEach((freq, i) => this.tone({ freq, delay: i * step, ...opts }));
+    },
+
+    // --- 場面ごとの音 ---
+
+    /** ピースを掴んだ／選んだ */
+    pick() {
+      this.tone({ freq: 440, to: 660, dur: 0.09, type: 'triangle', gain: 0.05 });
+    },
+
+    /** 置く位置が隣のマスへ動いた。ドラッグ中は何度も呼ばれるので間引く。 */
+    tick(placeable) {
+      const now = performance.now();
+      if (now - this.lastTick < TICK_INTERVAL) return;
+      this.lastTick = now;
+      if (placeable) {
+        this.tone({ freq: 1180, dur: 0.035, type: 'square', gain: 0.022 });
+      } else {
+        this.tone({ freq: 190, dur: 0.05, type: 'sine', gain: 0.03 });
+      }
+    },
+
+    /** 盤面に置いた。大きいピースほど低い音になる。 */
+    drop(cells) {
+      this.tone({ freq: 320 + cells * 16, to: 190 + cells * 10, dur: 0.11, type: 'square', gain: 0.05 });
+    },
+
+    /** 置かずに戻した／選択を解除した */
+    cancel() {
+      this.tone({ freq: 380, to: 240, dur: 0.11, type: 'triangle', gain: 0.04 });
+    },
+
+    /** 置けない場所で決定した */
+    blocked() {
+      this.tone({ freq: 150, dur: 0.14, type: 'sawtooth', gain: 0.04 });
+    },
+
+    /** ライン消去。同時に消すほど音が高く積み上がる。 */
+    clear(lineCount, combo) {
+      this.seq([523, 659, 784, 988, 1175].slice(0, Math.min(lineCount, 5)),
+        { step: 0.07, dur: 0.2, type: 'triangle', gain: 0.055 });
+      if (combo >= 2) {
+        this.tone({ freq: 1568, dur: 0.22, type: 'triangle', gain: 0.045, delay: 0.14 });
+      }
+    },
+
+    levelUp() {
+      this.seq([660, 880, 1170], { step: 0.1, dur: 0.22, type: 'triangle', gain: 0.055 });
+    },
+
+    allClear() {
+      this.seq([523, 659, 784, 1047, 1319], { step: 0.09, dur: 0.28, type: 'triangle', gain: 0.055 });
+    },
+
+    gameOver() {
+      this.tone({ freq: 300, to: 110, dur: 0.7, type: 'sawtooth', gain: 0.05 });
+    },
+
+    /** ボタン操作 */
+    ui() {
+      this.tone({ freq: 720, dur: 0.06, type: 'triangle', gain: 0.04 });
+    },
+
     toggle() {
       this.on = !this.on;
       store.set('blockbreak.sound', this.on ? 'on' : 'off');
       el.soundIcon.textContent = this.on ? '🔊' : '🔇';
       el.soundBtn.classList.toggle('off', !this.on);
-      if (this.on) this.play(660, 0.08);
+      if (this.on) this.ui();
     },
   };
 
@@ -454,7 +629,7 @@
     // linesAfterPlacing は配置前提の判定なので、配置済みの現在の盤面でも同じ結果になる。
 
     addScore(piece.cells.length, false);
-    sound.play(320 + piece.cells.length * 20, 0.09, 'square', 0.045);
+    sound.drop(piece.cells.length);
 
     renderBoard();
 
@@ -491,20 +666,32 @@
     const base = lineCount * 100 + Math.max(0, lineCount - 1) * 50;
     const points = base * state.combo;
     addScore(points, true);
-
     popScore(points, anchorRow, anchorCol);
-    if (lineCount >= 2 || state.combo >= 2) {
+
+    // 消したライン 10 本ごとにレベルが 1 つ上がる。
+    state.lines += lineCount;
+    const level = Math.min(Math.floor(state.lines / LINES_PER_LEVEL) + 1, MAX_LEVEL);
+    const leveledUp = level > state.level;
+    state.level = level;
+    renderLevel();
+
+    if (leveledUp) {
+      showCombo(`レベル ${level} になった！`, true);
+      announce(`レベル ${level} になりました。ピースが少し大きくなります。`);
+      sound.levelUp();
+    } else if (lineCount >= 2 || state.combo >= 2) {
       const parts = [];
       if (state.combo >= 2) parts.push(`COMBO ×${state.combo}`);
       if (lineCount >= 2) parts.push(`${lineCount} LINES!`);
       showCombo(parts.join('  '));
+    }
+
+    if (lineCount >= 2 || state.combo >= 2) {
       el.board.classList.add('shake');
       setTimeout(() => el.board.classList.remove('shake'), 300);
     }
 
-    for (let i = 0; i < lineCount; i++) {
-      sound.play(520 + i * 110, 0.16, 'triangle', 0.05);
-    }
+    sound.clear(lineCount, state.combo);
 
     // 盤面が空になったか（全消し）は、ここで確定している。
     // 演出はマスが消え終わってから出したいので、後片付けと一緒に走らせる。
@@ -538,8 +725,13 @@
 
   const isBoardEmpty = () => state.grid.every((row) => row.every((cell) => !cell));
 
-  /** 全消し（盤面が空になった）ときのご褒美演出。 */
+  /** 全消し（盤面が空になった）ときのご褒美。
+   *  ボーナス点に加えて、次に配る 3 つをちいさいピースにする。 */
   function celebrateAllClear() {
+    addScore(ALL_CLEAR_BONUS, true);
+    popScore(ALL_CLEAR_BONUS, (SIZE - 1) / 2, (SIZE - 1) / 2);
+    state.bonusNext = true;
+
     const center = (SIZE - 1) / 2;
     el.board.classList.add('allclear');
     for (let r = 0; r < SIZE; r++) {
@@ -551,11 +743,9 @@
       }
     }
 
-    showCombo('✨ ALL CLEAR ✨', true);
-    announce('全消し！');
-    [523, 659, 784, 1047, 1319].forEach((freq, i) => {
-      setTimeout(() => sound.play(freq, 0.25, 'triangle', 0.05), i * 90);
-    });
+    showCombo(`✨ ALL CLEAR ✨ +${ALL_CLEAR_BONUS}`, true);
+    announce(`全消し！ ボーナス ${ALL_CLEAR_BONUS} 点。つぎの 3 つはちいさいピースです。`);
+    sound.allClear();
 
     clearTimeout(allClearTimer);
     allClearTimer = setTimeout(endAllClearEffect, 1500);
@@ -588,6 +778,8 @@
   function finishTurn() {
     if (state.tray.every((slot) => slot.used)) {
       refillTray();
+      renderBonus();
+      if (state.bonusTray) announce('ごほうびタイム。ちいさいピースが 3 つ配られました。');
     }
     renderTray();
     if (!state.tray.some((slot) => !slot.used && hasAnyPlacement(slot.piece))) {
@@ -595,17 +787,20 @@
     }
   }
 
-  /** 3 つとも置けない組み合わせは避けて配り直す（理不尽な即死を減らす）。 */
+  /** 3 つとも置けない組み合わせは避けて配り直す（理不尽な即死を減らす）。
+   *  全消しの直後は「ごほうびタイム」として、ちいさいピースだけを配る。 */
   function refillTray() {
-    for (let attempt = 0; attempt < 30; attempt++) {
-      const candidate = [randomPiece(), randomPiece(), randomPiece()];
-      if (candidate.some((piece) => hasAnyPlacement(piece))) {
-        state.tray = candidate.map((piece) => ({ piece, used: false }));
-        return;
-      }
+    const group = state.bonusNext ? 'small' : null;
+    state.bonusTray = state.bonusNext;
+    state.bonusNext = false;
+
+    const deal = () => [randomPiece(group), randomPiece(group), randomPiece(group)];
+    const anyFits = (list) => list.some((piece) => hasAnyPlacement(piece));
+    let candidate = deal();
+    for (let attempt = 0; attempt < 30 && !anyFits(candidate); attempt++) {
+      candidate = deal();
     }
-    state.tray = [randomPiece(), randomPiece(), randomPiece()]
-      .map((piece) => ({ piece, used: false }));
+    state.tray = candidate.map((piece) => ({ piece, used: false }));
   }
 
   function gameOver() {
@@ -620,8 +815,7 @@
     announce(`ゲームオーバー。スコア ${state.score} 点。`);
     el.overlay.hidden = false;
     document.getElementById('play-again').focus();
-    sound.play(220, 0.3, 'sawtooth', 0.05);
-    setTimeout(() => sound.play(160, 0.4, 'sawtooth', 0.05), 160);
+    sound.gameOver();
   }
 
   /* ------------------------------------------------------------------ *
@@ -661,10 +855,12 @@
       offsetX: width / 2,
       offsetY: height + metrics.size * 0.55,
       target: null,
+      lastCell: undefined,   // 直前に狙っていたマス。変わったときだけ音を鳴らす。
       pointerId: event.pointerId,
     };
 
     pieceEl.classList.add('dragging');
+    sound.pick();
     moveDrag(event.clientX, event.clientY);
   }
 
@@ -682,6 +878,15 @@
 
     const valid = !outside && canPlaceAt(drag.piece, row, col);
     drag.target = valid ? { row, col } : null;
+
+    // 狙うマスが変わった瞬間だけ鳴らす（置けるかどうかで音を変える）。
+    const cellKey = outside ? null : `${row},${col}`;
+    if (cellKey !== drag.lastCell) {
+      // 掴んだ直後の 1 回は、掴んだ音と重なるので鳴らさない。
+      const justPicked = drag.lastCell === undefined;
+      drag.lastCell = cellKey;
+      if (!justPicked && cellKey !== null) sound.tick(valid);
+    }
 
     // 置ける位置ではマス目にぴったり吸着させ、着地点を分かりやすくする。
     const px = valid ? x + col * step : left;
@@ -710,6 +915,8 @@
     if (target) {
       el.hint?.remove();
       placePiece(index, piece, target.row, target.col);
+    } else {
+      sound.cancel();   // 置かずに戻した
     }
   }
 
@@ -762,6 +969,7 @@
     kb.col = spot.col;
     markSelected(index);
     renderCursor();
+    sound.pick();
     el.board.focus();
     announce(`${describePiece(slot.piece)} を選択。${kb.row + 1}行${kb.col + 1}列。` +
       '矢印キーで移動、Enter で配置、Escape で解除。');
@@ -798,6 +1006,7 @@
     kb.col = Math.min(Math.max(kb.col + dc, 0), SIZE - piece.cols);
     renderCursor();
     const ok = canPlaceAt(piece, kb.row, kb.col);
+    sound.tick(ok);
     announce(`${kb.row + 1}行${kb.col + 1}列${ok ? '' : ' 置けません'}`);
   }
 
@@ -834,6 +1043,7 @@
         // 続けて置けるよう、次のピースを自動で選ぶ（消去演出中は選べない）。
         if (!state.over && !state.busy) selectNextPiece();
       } else {
+        sound.blocked();
         announce('ここには置けません');
       }
       return;
@@ -842,6 +1052,7 @@
     if (event.key === 'Escape') {
       event.preventDefault();
       deselectPiece(true);
+      sound.cancel();
       announce('選択を解除しました');
     }
   }
@@ -869,6 +1080,10 @@
     state.combo = 0;
     state.over = false;
     state.beatBest = false;
+    state.lines = 0;
+    state.level = 1;
+    state.bonusNext = false;
+    state.bonusTray = false;
     state.tray = [];
     refillTray();
     el.overlay.hidden = true;
@@ -876,6 +1091,8 @@
     renderTray();
     renderCursor();
     renderScore(false);
+    renderLevel();
+    renderBonus();
   }
 
   function init() {
@@ -898,9 +1115,13 @@
     window.addEventListener('blur', cancelDrag);
 
     document.getElementById('restart-btn').addEventListener('click', () => {
+      sound.ui();
       if (state.score === 0 || confirm('最初からやり直しますか？')) newGame();
     });
-    document.getElementById('play-again').addEventListener('click', newGame);
+    document.getElementById('play-again').addEventListener('click', () => {
+      sound.ui();
+      newGame();
+    });
     el.soundBtn.addEventListener('click', () => sound.toggle());
 
     let resizeTimer;
