@@ -2,7 +2,7 @@
 <html lang="ja">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
 <meta name="theme-color" content="#131a3a">
 <title>BlockBreak — ブロックパズル</title>
 <link rel="stylesheet" href="style.css">
@@ -31,15 +31,17 @@
       <div class="combo" id="combo" aria-live="polite"></div>
 
       <main class="board-wrap">
-        <div class="board" id="board" role="grid" aria-label="ゲーム盤"></div>
+        <div class="board" id="board" role="grid" aria-label="ゲーム盤" tabindex="0"></div>
         <div class="fx" id="fx" aria-hidden="true"></div>
       </main>
 
-      <footer class="tray" id="tray"></footer>
+      <footer class="tray" id="tray" role="group" aria-label="手持ちのピース"></footer>
 
-      <p class="hint" id="hint">ピースを盤面にドラッグして置こう</p>
+      <p class="hint" id="hint">ピースを盤面にドラッグして置こう（キーボードでも操作できます）</p>
     </div>
   </div>
+
+  <p class="sr-only" id="status" role="status" aria-live="polite"></p>
 
   <div class="drag-layer" id="drag-layer" aria-hidden="true"></div>
 
