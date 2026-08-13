@@ -477,6 +477,29 @@ body {
   text-align: center;
 }
 
+/* ---------- Build info ---------- */
+
+/* レイアウトに影響させたくないので、流れから外して隅に置く。 */
+.build {
+  position: fixed;
+  right: max(6px, env(safe-area-inset-right));
+  bottom: max(4px, env(safe-area-inset-bottom));
+  margin: 0;
+  font-size: 10px;
+  line-height: 1.4;
+  color: var(--muted);
+  opacity: 0.5;
+  pointer-events: none;
+  z-index: 30;
+}
+
+.build a {
+  color: inherit;
+  pointer-events: auto;
+}
+
+.build:hover { opacity: 0.9; }
+
 /* ---------- Overlay ---------- */
 
 .overlay {
