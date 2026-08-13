@@ -85,15 +85,72 @@
     });
   });
 
-  const TOTAL_WEIGHT = PIECES.reduce((sum, p) => sum + p.weight, 0);
+  /* ------------------------------------------------------------------ *
+   * 難易度（レベル）
+   *
+   *   レベル = 消したライン ÷ 10 + 1（最大 10）
+   *   レベルが 1 上がるごとに、ちいさいピースが 4% 減って
+   *   おおきいピースが 4% 増える。ふつうのピースはいつも 35%。
+   *
+   *   レベル 1 … ちいさい 50% / ふつう 35% / おおきい 15%
+   *   レベル10 … ちいさい 14% / ふつう 35% / おおきい 51%
+   * ------------------------------------------------------------------ */
 
-  function randomPiece() {
-    let n = Math.random() * TOTAL_WEIGHT;
-    for (const piece of PIECES) {
+  const LINES_PER_LEVEL = 10;
+  const MAX_LEVEL = 10;
+  const ALL_CLEAR_BONUS = 300;
+  const SMALL_AT_LEVEL_1 = 50;
+  const MEDIUM_SHARE = 35;
+  const SHIFT_PER_LEVEL = 4;
+
+  /** ピースの大きさ区分。マス数だけで決まる。 */
+  const sizeGroup = (piece) => {
+    if (piece.cells.length <= 3) return 'small';
+    if (piece.cells.length === 4) return 'medium';
+    return 'large';
+  };
+
+  const GROUPS = { small: [], medium: [], large: [] };
+  PIECES.forEach((piece) => GROUPS[sizeGroup(piece)].push(piece));
+
+  const GROUP_WEIGHT = {};
+  for (const [name, list] of Object.entries(GROUPS)) {
+    GROUP_WEIGHT[name] = list.reduce((sum, p) => sum + p.weight, 0);
+  }
+
+  /** そのレベルでの、大きさ区分ごとの出現率（合計 100）。 */
+  function groupShares(level) {
+    const step = Math.min(level, MAX_LEVEL) - 1;
+    return {
+      small: SMALL_AT_LEVEL_1 - step * SHIFT_PER_LEVEL,
+      medium: MEDIUM_SHARE,
+      large: (100 - SMALL_AT_LEVEL_1 - MEDIUM_SHARE) + step * SHIFT_PER_LEVEL,
+    };
+  }
+
+  /** 区分の中では、これまでどおり基本形の weight どおりに選ぶ。 */
+  function pickFromGroup(name) {
+    const list = GROUPS[name];
+    let n = Math.random() * GROUP_WEIGHT[name];
+    for (const piece of list) {
       n -= piece.weight;
       if (n <= 0) return piece;
     }
-    return PIECES[PIECES.length - 1];
+    return list[list.length - 1];
+  }
+
+  /** レベルに応じた大きさの偏りでピースを 1 つ選ぶ。
+   *  group を渡すと、その区分だけから選ぶ（ごほうびタイム用）。 */
+  function randomPiece(group) {
+    if (group) return pickFromGroup(group);
+
+    const shares = groupShares(state.level);
+    let n = Math.random() * 100;
+    for (const name of ['small', 'medium', 'large']) {
+      n -= shares[name];
+      if (n <= 0) return pickFromGroup(name);
+    }
+    return pickFromGroup('large');
   }
 
   /* ------------------------------------------------------------------ *
@@ -129,6 +186,10 @@
     over: false,
     busy: false,     // ライン消去の演出中は入力を受け付けない
     beatBest: false, // このゲーム中に自己ベストを更新したか
+    lines: 0,        // 消したラインの合計
+    level: 1,
+    bonusNext: false, // 次に配る 3 つをごほうび（ちいさいピース）にする
+    bonusTray: false, // 今のトレイがごほうびで配られたものか
   };
 
   // キーボード操作の状態（選択中のピースと盤面カーソル）
@@ -154,6 +215,11 @@
     soundBtn: document.getElementById('sound-btn'),
     soundIcon: document.getElementById('sound-icon'),
     status: document.getElementById('status'),
+    level: document.getElementById('level'),
+    levelBar: document.getElementById('level-bar'),
+    levelFill: document.getElementById('level-fill'),
+    levelNext: document.getElementById('level-next'),
+    bonus: document.getElementById('bonus'),
   };
 
   /** スクリーンリーダー向けに状況を読み上げる。 */
@@ -380,6 +446,21 @@
     }
   }
 
+  function renderLevel() {
+    const maxed = state.level >= MAX_LEVEL;
+    const done = maxed ? LINES_PER_LEVEL : state.lines % LINES_PER_LEVEL;
+    el.level.textContent = String(state.level);
+    el.levelFill.style.width = `${(done / LINES_PER_LEVEL) * 100}%`;
+    el.levelBar.setAttribute('aria-valuenow', String(done));
+    el.levelNext.textContent = maxed
+      ? 'さいだいレベル'
+      : `つぎまで あと ${LINES_PER_LEVEL - done} 本`;
+  }
+
+  function renderBonus() {
+    el.bonus.hidden = !state.bonusTray;
+  }
+
   function showCombo(text, big) {
     el.combo.textContent = text;
     el.combo.classList.add('show');
@@ -491,13 +572,27 @@
     const base = lineCount * 100 + Math.max(0, lineCount - 1) * 50;
     const points = base * state.combo;
     addScore(points, true);
-
     popScore(points, anchorRow, anchorCol);
-    if (lineCount >= 2 || state.combo >= 2) {
+
+    // 消したライン 10 本ごとにレベルが 1 つ上がる。
+    state.lines += lineCount;
+    const level = Math.min(Math.floor(state.lines / LINES_PER_LEVEL) + 1, MAX_LEVEL);
+    const leveledUp = level > state.level;
+    state.level = level;
+    renderLevel();
+
+    if (leveledUp) {
+      showCombo(`レベル ${level} になった！`, true);
+      announce(`レベル ${level} になりました。ピースが少し大きくなります。`);
+      [660, 880, 1170].forEach((f, i) => setTimeout(() => sound.play(f, 0.2, 'triangle', 0.05), i * 100));
+    } else if (lineCount >= 2 || state.combo >= 2) {
       const parts = [];
       if (state.combo >= 2) parts.push(`COMBO ×${state.combo}`);
       if (lineCount >= 2) parts.push(`${lineCount} LINES!`);
       showCombo(parts.join('  '));
+    }
+
+    if (lineCount >= 2 || state.combo >= 2) {
       el.board.classList.add('shake');
       setTimeout(() => el.board.classList.remove('shake'), 300);
     }
@@ -538,8 +633,13 @@
 
   const isBoardEmpty = () => state.grid.every((row) => row.every((cell) => !cell));
 
-  /** 全消し（盤面が空になった）ときのご褒美演出。 */
+  /** 全消し（盤面が空になった）ときのご褒美。
+   *  ボーナス点に加えて、次に配る 3 つをちいさいピースにする。 */
   function celebrateAllClear() {
+    addScore(ALL_CLEAR_BONUS, true);
+    popScore(ALL_CLEAR_BONUS, (SIZE - 1) / 2, (SIZE - 1) / 2);
+    state.bonusNext = true;
+
     const center = (SIZE - 1) / 2;
     el.board.classList.add('allclear');
     for (let r = 0; r < SIZE; r++) {
@@ -551,8 +651,8 @@
       }
     }
 
-    showCombo('✨ ALL CLEAR ✨', true);
-    announce('全消し！');
+    showCombo(`✨ ALL CLEAR ✨ +${ALL_CLEAR_BONUS}`, true);
+    announce(`全消し！ ボーナス ${ALL_CLEAR_BONUS} 点。つぎの 3 つはちいさいピースです。`);
     [523, 659, 784, 1047, 1319].forEach((freq, i) => {
       setTimeout(() => sound.play(freq, 0.25, 'triangle', 0.05), i * 90);
     });
@@ -588,6 +688,8 @@
   function finishTurn() {
     if (state.tray.every((slot) => slot.used)) {
       refillTray();
+      renderBonus();
+      if (state.bonusTray) announce('ごほうびタイム。ちいさいピースが 3 つ配られました。');
     }
     renderTray();
     if (!state.tray.some((slot) => !slot.used && hasAnyPlacement(slot.piece))) {
@@ -595,17 +697,20 @@
     }
   }
 
-  /** 3 つとも置けない組み合わせは避けて配り直す（理不尽な即死を減らす）。 */
+  /** 3 つとも置けない組み合わせは避けて配り直す（理不尽な即死を減らす）。
+   *  全消しの直後は「ごほうびタイム」として、ちいさいピースだけを配る。 */
   function refillTray() {
-    for (let attempt = 0; attempt < 30; attempt++) {
-      const candidate = [randomPiece(), randomPiece(), randomPiece()];
-      if (candidate.some((piece) => hasAnyPlacement(piece))) {
-        state.tray = candidate.map((piece) => ({ piece, used: false }));
-        return;
-      }
+    const group = state.bonusNext ? 'small' : null;
+    state.bonusTray = state.bonusNext;
+    state.bonusNext = false;
+
+    const deal = () => [randomPiece(group), randomPiece(group), randomPiece(group)];
+    const anyFits = (list) => list.some((piece) => hasAnyPlacement(piece));
+    let candidate = deal();
+    for (let attempt = 0; attempt < 30 && !anyFits(candidate); attempt++) {
+      candidate = deal();
     }
-    state.tray = [randomPiece(), randomPiece(), randomPiece()]
-      .map((piece) => ({ piece, used: false }));
+    state.tray = candidate.map((piece) => ({ piece, used: false }));
   }
 
   function gameOver() {
@@ -869,6 +974,10 @@
     state.combo = 0;
     state.over = false;
     state.beatBest = false;
+    state.lines = 0;
+    state.level = 1;
+    state.bonusNext = false;
+    state.bonusTray = false;
     state.tray = [];
     refillTray();
     el.overlay.hidden = true;
@@ -876,6 +985,8 @@
     renderTray();
     renderCursor();
     renderScore(false);
+    renderLevel();
+    renderBonus();
   }
 
   function init() {
