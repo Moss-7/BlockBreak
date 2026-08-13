@@ -247,6 +247,37 @@
     el.status.textContent = text;
   }
 
+  /** どの版が動いているかを隅に表示する。
+   *  公開時はワークフローがコミットの短縮 SHA と時刻を埋め込む。 */
+  function renderBuildInfo() {
+    const node = document.getElementById('build');
+    if (!node) return;
+    const meta = (name) => document.querySelector(`meta[name="${name}"]`)?.content || '';
+    const version = meta('app-version') || '?';
+    const sha = meta('build-sha');
+    const builtAt = meta('build-at');
+    // 置き換えられていなければローカル実行。
+    const built = sha && !sha.startsWith('__');
+
+    node.textContent = '';
+    const label = document.createTextNode(`v${version} · `);
+    node.appendChild(label);
+
+    if (built) {
+      const link = document.createElement('a');
+      link.href = `https://github.com/Moss-7/BlockBreak/commit/${sha}`;
+      link.textContent = sha;
+      link.target = '_blank';
+      link.rel = 'noopener';
+      node.appendChild(link);
+      if (builtAt && !builtAt.startsWith('__')) {
+        node.appendChild(document.createTextNode(` · ${builtAt}`));
+      }
+    } else {
+      node.appendChild(document.createTextNode('dev'));
+    }
+  }
+
   const cellEls = [];
 
   function buildBoard() {
@@ -1154,6 +1185,7 @@
     el.soundIcon.textContent = sound.on ? '🔊' : '🔇';
     el.soundBtn.classList.toggle('off', !sound.on);
 
+    renderBuildInfo();
     buildBoard();
     newGame();
 
