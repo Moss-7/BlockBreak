@@ -44,9 +44,12 @@ body {
   flex-direction: column;
   align-items: center;
   gap: 8px;
+  /* どうしても収まらない画面での最後の逃げ道。 */
+  overflow-y: auto;
 }
 
 .stage {
+  position: relative;
   flex: 1;
   min-height: 0;
   width: 100%;
@@ -140,7 +143,10 @@ body {
 
 .board-wrap {
   position: relative;
-  width: min(94vw, 440px);
+  /* 幅だけでなく高さでも上限を決める。低い画面で盤面がはみ出し、
+     トレイが画面外に押し出されて操作できなくなるのを防ぐ。 */
+  width: min(94vw, 440px, calc(100vh - 250px));
+  width: min(94vw, 440px, calc(100dvh - 250px));
   flex: 0 0 auto;
 }
 
@@ -411,6 +417,42 @@ body {
   .tray { min-height: 96px; }
   .slot { min-height: 88px; }
   .stat--score .stat__value { font-size: 28px; }
+  .hint { display: none; }
+}
+
+/* 横向きスマホなど、低くて横に広い画面では盤面とトレイを横並びにする。
+   （上の max-height ルールを打ち消すため、必ずこの順序で書くこと） */
+@media (orientation: landscape) and (max-height: 620px) {
+  .app { padding: 6px 10px; gap: 4px; }
+
+  .stage { flex-direction: row; gap: 14px; }
+
+  .combo {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: auto;
+    text-align: center;
+    z-index: 3;
+    pointer-events: none;
+  }
+
+  .board-wrap {
+    width: min(calc(100vh - 70px), 58vw);
+    width: min(calc(100dvh - 70px), 58vw);
+  }
+
+  .tray {
+    width: min(30vw, 150px);
+    height: min(calc(100vh - 70px), 58vw);
+    height: min(calc(100dvh - 70px), 58vw);
+    min-height: 0;
+    grid-template-columns: 1fr;
+    grid-template-rows: repeat(3, 1fr);
+  }
+
+  .slot { min-height: 0; }
   .hint { display: none; }
 }
 

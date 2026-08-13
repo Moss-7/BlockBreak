@@ -94,6 +94,26 @@
    * ゲーム状態
    * ------------------------------------------------------------------ */
 
+  /* localStorage は環境によっては参照した時点で例外を投げる
+   * （iframe の sandbox、サイトデータのブロック、Safari のプライベートなど）。
+   * ゲーム本体が巻き添えで停止しないよう、必ずこのラッパ経由で読み書きする。 */
+  const store = {
+    get(name) {
+      try {
+        return localStorage.getItem(name);
+      } catch (_) {
+        return null;
+      }
+    },
+    set(name, value) {
+      try {
+        localStorage.setItem(name, value);
+      } catch (_) {
+        // 保存できない環境では黙って諦める（プレイは継続できる）。
+      }
+    },
+  };
+
   const state = {
     grid: [],        // null または色文字列
     tray: [],        // { piece, used } × 3
@@ -101,7 +121,10 @@
     best: 0,
     combo: 0,        // 連続でライン消去した回数
     over: false,
+    busy: false,     // ライン消去の演出中は入力を受け付けない
   };
+
+  let clearTimer = null;   // 消去演出の後始末を予約したタイマー
 
   const el = {
     board: document.getElementById('board'),
@@ -193,6 +216,8 @@
     for (let r = 0; r < SIZE; r++) {
       for (let c = 0; c < SIZE; c++) {
         const cell = cellEls[r][c];
+        // 消去アニメーション中のマスは、演出が終わるまで見た目を触らない。
+        if (cell.classList.contains('clearing')) continue;
         const color = state.grid[r][c];
         const wasFilled = cell.classList.contains('filled');
         if (color) {
@@ -279,24 +304,34 @@
     return { x: first.left, y: first.top, size: first.width, step: second.left - first.left };
   }
 
-  function trayCellSize() {
-    const { size } = boardMetrics();
-    return Math.max(14, Math.round(size * 0.62));
-  }
-
   function renderTray() {
-    const cellSize = trayCellSize();
+    const board = boardMetrics();
+    const gap = board.step - board.size;
+
     el.tray.innerHTML = '';
-    state.tray.forEach((slot, index) => {
+    const holders = state.tray.map(() => {
       const holder = document.createElement('div');
       holder.className = 'slot';
-      if (!slot.used) {
-        const pieceEl = buildPieceEl(slot.piece, cellSize, 'piece');
-        pieceEl.dataset.index = String(index);
-        if (!hasAnyPlacement(slot.piece)) pieceEl.classList.add('dead');
-        holder.appendChild(pieceEl);
-      }
       el.tray.appendChild(holder);
+      return holder;
+    });
+    // 中身を入れるとスロットの寸法が変わり得るので、先に全部測っておく。
+    const boxes = holders.map((holder) => holder.getBoundingClientRect());
+
+    state.tray.forEach((slot, index) => {
+      if (slot.used) return;
+      const piece = slot.piece;
+      const box = boxes[index];
+      // 盤面のマスより少し小さく、かつスロットからはみ出さない大きさにする。
+      const cellSize = Math.max(10, Math.min(
+        board.size * 0.62,
+        (box.height - (piece.rows - 1) * gap) / piece.rows,
+        (box.width - (piece.cols - 1) * gap) / piece.cols,
+      ));
+      const pieceEl = buildPieceEl(piece, cellSize, 'piece');
+      pieceEl.dataset.index = String(index);
+      if (!hasAnyPlacement(piece)) pieceEl.classList.add('dead');
+      holders[index].appendChild(pieceEl);
     });
   }
 
@@ -333,7 +368,7 @@
    * ------------------------------------------------------------------ */
 
   const sound = {
-    on: localStorage.getItem('blockbreak.sound') !== 'off',
+    on: store.get('blockbreak.sound') !== 'off',
     ctx: null,
     play(freq, duration = 0.12, type = 'triangle', gain = 0.06) {
       if (!this.on) return;
@@ -353,7 +388,7 @@
     },
     toggle() {
       this.on = !this.on;
-      localStorage.setItem('blockbreak.sound', this.on ? 'on' : 'off');
+      store.set('blockbreak.sound', this.on ? 'on' : 'off');
       el.soundIcon.textContent = this.on ? '🔊' : '🔇';
       el.soundBtn.classList.toggle('off', !this.on);
       if (this.on) this.play(660, 0.08);
@@ -364,9 +399,14 @@
    * ピース配置とライン消去
    * ------------------------------------------------------------------ */
 
-  function placePiece(index, row, col) {
+  /** ドロップされたピースを盤面へ確定させる。
+   * index だけでなく piece 自体も受け取り、掴んだときのピースと
+   * トレイの中身が食い違っていたら（ドラッグ中にリスタートされた等）配置しない。 */
+  function placePiece(index, piece, row, col) {
     const slot = state.tray[index];
-    const piece = slot.piece;
+    if (state.over || state.busy) return;
+    if (!slot || slot.used || slot.piece !== piece) return;
+    if (!canPlaceAt(piece, row, col)) return;
 
     for (const [dr, dc] of piece.cells) {
       state.grid[row + dr][col + dc] = piece.color;
@@ -392,19 +432,25 @@
 
   function clearLines(rows, cols, lineCount, anchorRow, anchorCol) {
     state.combo += 1;
+    state.busy = true;
 
     const targets = new Set();
     rows.forEach((r) => { for (let c = 0; c < SIZE; c++) targets.add(`${r},${c}`); });
     cols.forEach((c) => { for (let r = 0; r < SIZE; r++) targets.add(`${r},${c}`); });
 
+    // 盤面の状態はここで即座に更新し、演出だけを後回しにする。
+    // 消えたはずのラインが state.grid に残っていると、次の一手が
+    // 同じラインを二重に消したものと判定してしまうため。
     targets.forEach((k) => {
       const [r, c] = k.split(',').map(Number);
+      state.grid[r][c] = null;
       cellEls[r][c].classList.add('clearing');
     });
 
     // 1 ライン 100 点、同時消しでボーナス、コンボで倍率。
     const base = lineCount * 100 + Math.max(0, lineCount - 1) * 50;
     const points = base * state.combo;
+    addScore(points, true);
 
     popScore(points, anchorRow, anchorCol);
     if (lineCount >= 2 || state.combo >= 2) {
@@ -420,24 +466,35 @@
       sound.play(520 + i * 110, 0.16, 'triangle', 0.05);
     }
 
-    setTimeout(() => {
+    clearTimer = setTimeout(() => {
+      clearTimer = null;
       targets.forEach((k) => {
         const [r, c] = k.split(',').map(Number);
-        state.grid[r][c] = null;
-        cellEls[r][c].classList.remove('clearing', 'filled');
-        cellEls[r][c].style.removeProperty('--c');
+        cellEls[r][c].classList.remove('clearing');
       });
-      addScore(points, true);
+      state.busy = false;
       renderBoard();
       finishTurn();
     }, 260);
+  }
+
+  /** 消去演出の予約を取り消し、演出用のクラスを片付ける。 */
+  function cancelClearAnimation() {
+    if (clearTimer !== null) {
+      clearTimeout(clearTimer);
+      clearTimer = null;
+    }
+    state.busy = false;
+    for (let r = 0; r < SIZE; r++) {
+      for (let c = 0; c < SIZE; c++) cellEls[r][c].classList.remove('clearing');
+    }
   }
 
   function addScore(points, animate) {
     state.score += points;
     if (state.score > state.best) {
       state.best = state.score;
-      localStorage.setItem(STORAGE_KEY, String(state.best));
+      store.set(STORAGE_KEY, String(state.best));
     }
     renderScore(animate);
   }
@@ -486,7 +543,7 @@
   let drag = null;
 
   function onPointerDown(event) {
-    if (state.over) return;
+    if (state.over || state.busy) return;
     const pieceEl = event.target.closest('.piece');
     if (!pieceEl || drag) return;
 
@@ -559,10 +616,11 @@
     if (!drag || event.pointerId !== drag.pointerId) return;
     const target = drag.target;
     const index = drag.index;
+    const piece = drag.piece;
     cancelDrag();
     if (target) {
       el.hint?.remove();
-      placePiece(index, target.row, target.col);
+      placePiece(index, piece, target.row, target.col);
     }
   }
 
@@ -579,6 +637,9 @@
    * ------------------------------------------------------------------ */
 
   function newGame() {
+    // 進行中のドラッグと、前のゲームに予約された消去演出を破棄してから始める。
+    cancelDrag();
+    cancelClearAnimation();
     state.grid = emptyGrid();
     state.score = 0;
     state.combo = 0;
@@ -592,7 +653,7 @@
   }
 
   function init() {
-    state.best = Number(localStorage.getItem(STORAGE_KEY) || 0);
+    state.best = Number(store.get(STORAGE_KEY) || 0);
     el.soundIcon.textContent = sound.on ? '🔊' : '🔇';
     el.soundBtn.classList.toggle('off', !sound.on);
 
@@ -602,7 +663,10 @@
     el.tray.addEventListener('pointerdown', onPointerDown);
     window.addEventListener('pointermove', onPointerMove, { passive: false });
     window.addEventListener('pointerup', onPointerUp);
-    window.addEventListener('pointercancel', cancelDrag);
+    window.addEventListener('pointercancel', (event) => {
+      // 別の指のキャンセルで進行中のドラッグを巻き戻さない。
+      if (drag && event.pointerId === drag.pointerId) cancelDrag();
+    });
     window.addEventListener('blur', cancelDrag);
 
     document.getElementById('restart-btn').addEventListener('click', () => {
