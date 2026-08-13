@@ -6,7 +6,10 @@
   'use strict';
 
   const SIZE = 8;
-  const STORAGE_KEY = 'blockbreak.best';
+  const LEGACY_BEST_KEY = 'blockbreak.best';
+  const DIFFICULTY_KEY = 'blockbreak.difficulty';
+  /** ハイスコアはむずかしさごとに分けて持つ。 */
+  const bestKey = (difficulty) => `blockbreak.best.${difficulty}`;
 
   /* ------------------------------------------------------------------ *
    * ピース定義
@@ -96,8 +99,37 @@
    *   レベル10 … ちいさい 14% / ふつう 35% / おおきい 51%
    * ------------------------------------------------------------------ */
 
-  const LINES_PER_LEVEL = 10;
   const MAX_LEVEL = 10;
+
+  /* むずかしさ。変わるのは「揃いやすさ」に効く 2 つだけ。
+   *   help  … 配られる 3 つに「いま消せるピース」が無いとき、
+   *           1 つを消せるピースに差し替える確率
+   *   lines … レベルが 1 つ上がるまでに消すライン数
+   *           （レベルが上がるほど大きいピースが増える） */
+  const DIFFICULTIES = {
+    easy: {
+      label: 'Easy',
+      lines: 15,
+      help: () => 100,
+      desc: '消せるピースがいつも配られます。レベルは 15 本ごと。',
+    },
+    normal: {
+      label: 'Normal',
+      lines: 10,
+      help: (level) => Math.max(0, 100 - (Math.min(level, MAX_LEVEL) - 1) * 10),
+      desc: '消せるピースが配られやすいですが、レベルが上がるほど減ります。レベルは 10 本ごと。',
+    },
+    hard: {
+      label: 'Hard',
+      lines: 6,
+      help: () => 0,
+      desc: 'おたすけはありません。自分で消せる形を作ります。レベルは 6 本ごと。',
+    },
+  };
+  const DEFAULT_DIFFICULTY = 'normal';
+
+  const rules = () => DIFFICULTIES[state.difficulty] || DIFFICULTIES[DEFAULT_DIFFICULTY];
+  const linesPerLevel = () => rules().lines;
 
   /* スコア。本家の攻略情報に合わせ、コンボは「加算式」にしている。
    *   ライン 1 本 = 50 点
@@ -114,11 +146,8 @@
    * いちばん置ける数が多いものを使う。 */
   const REFILL_RETRIES = 30;
 
-  /* おたすけ。低いレベルでは「いま消せるピース」を 1 つ混ぜる。
-   *   おたすけ確率 = 100% −（レベル − 1）× 10%
-   *   レベル 1 は 100%、レベル 10 は 10% */
+  /* おたすけの引き直し回数。確率はむずかしさごとに決まる。 */
   const HELP_RETRIES = 20;
-  const helpChance = (level) => Math.max(0, 100 - (Math.min(level, MAX_LEVEL) - 1) * 10);
   const SMALL_AT_LEVEL_1 = 50;
   const MEDIUM_SHARE = 35;
   const SHIFT_PER_LEVEL = 4;
@@ -210,6 +239,7 @@
     level: 1,
     bonusNext: false, // 次に配る 3 つをごほうび（ちいさいピース）にする
     bonusTray: false, // 今のトレイがごほうびで配られたものか
+    difficulty: DEFAULT_DIFFICULTY,
   };
 
   // キーボード操作の状態（選択中のピースと盤面カーソル）
@@ -240,6 +270,11 @@
     levelFill: document.getElementById('level-fill'),
     levelNext: document.getElementById('level-next'),
     bonus: document.getElementById('bonus'),
+    settings: document.getElementById('settings'),
+    settingsBtn: document.getElementById('settings-btn'),
+    difficultyChip: document.getElementById('difficulty-chip'),
+    difficultyDesc: document.getElementById('difficulty-desc'),
+    soundToggle: document.getElementById('sound-toggle'),
   };
 
   /** スクリーンリーダー向けに状況を読み上げる。 */
@@ -499,17 +534,34 @@
 
   function renderLevel() {
     const maxed = state.level >= MAX_LEVEL;
-    const done = maxed ? LINES_PER_LEVEL : state.lines % LINES_PER_LEVEL;
+    const per = linesPerLevel();
+    const done = maxed ? per : state.lines % per;
     el.level.textContent = String(state.level);
-    el.levelFill.style.width = `${(done / LINES_PER_LEVEL) * 100}%`;
+    el.levelFill.style.width = `${(done / per) * 100}%`;
     el.levelBar.setAttribute('aria-valuenow', String(done));
     el.levelNext.textContent = maxed
       ? 'さいだいレベル'
-      : `つぎまで あと ${LINES_PER_LEVEL - done} 本`;
+      : `つぎまで あと ${per - done} 本`;
   }
 
   function renderBonus() {
     el.bonus.hidden = !state.bonusTray;
+  }
+
+  function renderDifficulty() {
+    const current = rules();
+    el.difficultyChip.textContent = current.label;
+    el.difficultyDesc.textContent = current.desc;
+    el.settings.querySelectorAll('.seg').forEach((seg) => {
+      seg.setAttribute('aria-checked', String(seg.dataset.difficulty === state.difficulty));
+    });
+  }
+
+  function renderSound() {
+    el.soundIcon.textContent = sound.on ? '🔊' : '🔇';
+    el.soundBtn.classList.toggle('off', !sound.on);
+    el.soundToggle.textContent = sound.on ? 'オン' : 'オフ';
+    el.soundToggle.setAttribute('aria-pressed', String(sound.on));
   }
 
   function showCombo(text, big) {
@@ -652,8 +704,7 @@
     toggle() {
       this.on = !this.on;
       store.set('blockbreak.sound', this.on ? 'on' : 'off');
-      el.soundIcon.textContent = this.on ? '🔊' : '🔇';
-      el.soundBtn.classList.toggle('off', !this.on);
+      renderSound();
       if (this.on) this.ui();
     },
   };
@@ -720,7 +771,7 @@
 
     // 消したライン 10 本ごとにレベルが 1 つ上がる。
     state.lines += lineCount;
-    const level = Math.min(Math.floor(state.lines / LINES_PER_LEVEL) + 1, MAX_LEVEL);
+    const level = Math.min(Math.floor(state.lines / linesPerLevel()) + 1, MAX_LEVEL);
     const leveledUp = level > state.level;
     state.level = level;
     renderLevel();
@@ -820,7 +871,7 @@
     if (state.score > state.best) {
       state.best = state.score;
       state.beatBest = true;
-      store.set(STORAGE_KEY, String(state.best));
+      store.set(bestKey(state.difficulty), String(state.best));
     }
     renderScore(animate);
   }
@@ -874,7 +925,7 @@
       }
     }
 
-    if (!candidate.some(canClearLine) && Math.random() * 100 < helpChance(state.level)) {
+    if (!candidate.some(canClearLine) && Math.random() * 100 < rules().help(state.level)) {
       for (let attempt = 0; attempt < HELP_RETRIES; attempt++) {
         const piece = randomPiece(group);
         // 置ける数を減らさないよう、置き場所があるものだけを混ぜる。
@@ -1152,6 +1203,47 @@
   }
 
   /* ------------------------------------------------------------------ *
+   * 設定画面
+   * ------------------------------------------------------------------ */
+
+  let settingsOpener = null;   // 閉じたときにフォーカスを戻す先
+
+  function openSettings() {
+    settingsOpener = document.activeElement;
+    cancelDrag();
+    deselectPiece(false);
+    renderDifficulty();
+    renderSound();
+    el.settings.hidden = false;
+    el.settings.querySelector('.seg[aria-checked="true"]')?.focus();
+    sound.ui();
+  }
+
+  function closeSettings() {
+    if (el.settings.hidden) return;
+    el.settings.hidden = true;
+    sound.ui();
+    (settingsOpener || el.settingsBtn).focus?.();
+    settingsOpener = null;
+  }
+
+  /** むずかしさを変えると配られ方が変わるので、その場で新しいゲームにする。 */
+  function changeDifficulty(difficulty) {
+    if (!DIFFICULTIES[difficulty]) return;
+    if (difficulty === state.difficulty) return;
+    const playing = state.score > 0 && !state.over;
+    if (playing && !confirm('むずかしさを変えると、さいしょからやり直しになります。いいですか？')) {
+      return;
+    }
+    state.difficulty = difficulty;
+    store.set(DIFFICULTY_KEY, difficulty);
+    state.best = Number(store.get(bestKey(difficulty)) || 0);
+    renderDifficulty();
+    newGame();
+    announce(`むずかしさを ${rules().label} にしました。`);
+  }
+
+  /* ------------------------------------------------------------------ *
    * 初期化
    * ------------------------------------------------------------------ */
 
@@ -1180,10 +1272,23 @@
     renderBonus();
   }
 
+  /** むずかしさ別のハイスコアへ移行する。
+   *  むずかしさが無かった頃の記録は Normal のものとして引き継ぐ。 */
+  function loadRecords() {
+    const saved = store.get(DIFFICULTY_KEY);
+    state.difficulty = DIFFICULTIES[saved] ? saved : DEFAULT_DIFFICULTY;
+
+    const legacy = store.get(LEGACY_BEST_KEY);
+    if (legacy !== null && store.get(bestKey(DEFAULT_DIFFICULTY)) === null) {
+      store.set(bestKey(DEFAULT_DIFFICULTY), legacy);
+    }
+    state.best = Number(store.get(bestKey(state.difficulty)) || 0);
+  }
+
   function init() {
-    state.best = Number(store.get(STORAGE_KEY) || 0);
-    el.soundIcon.textContent = sound.on ? '🔊' : '🔇';
-    el.soundBtn.classList.toggle('off', !sound.on);
+    loadRecords();
+    renderSound();
+    renderDifficulty();
 
     renderBuildInfo();
     buildBoard();
@@ -1209,6 +1314,22 @@
       newGame();
     });
     el.soundBtn.addEventListener('click', () => sound.toggle());
+    el.soundToggle.addEventListener('click', () => sound.toggle());
+
+    el.settingsBtn.addEventListener('click', openSettings);
+    document.getElementById('settings-close').addEventListener('click', closeSettings);
+    el.settings.addEventListener('click', (event) => {
+      // パネルの外側を押したら閉じる。
+      if (event.target === el.settings) closeSettings();
+      const seg = event.target.closest('.seg');
+      if (seg) changeDifficulty(seg.dataset.difficulty);
+    });
+    document.addEventListener('keydown', (event) => {
+      if (event.key === 'Escape' && !el.settings.hidden) {
+        event.preventDefault();
+        closeSettings();
+      }
+    });
 
     let resizeTimer;
     window.addEventListener('resize', () => {

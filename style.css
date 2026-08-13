@@ -136,6 +136,16 @@ body {
   color: var(--muted);
 }
 
+.level__diff {
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.1);
+  color: var(--text);
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+}
+
 .level__name { white-space: nowrap; }
 .level__name b { color: var(--text); font-size: 15px; }
 
@@ -568,6 +578,85 @@ body {
   font-size: 26px;
   font-weight: 900;
   font-variant-numeric: tabular-nums;
+}
+
+/* ---------- Settings ---------- */
+
+.setting { margin-bottom: 18px; text-align: left; }
+
+.setting--row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.setting__name {
+  margin: 0 0 8px;
+  font-size: 13px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  color: var(--muted);
+}
+
+.setting--row .setting__name { margin: 0; }
+
+.setting__desc {
+  margin: 10px 2px 0;
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--muted);
+  min-height: 2.6em;
+}
+
+.segmented {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 6px;
+  padding: 4px;
+  border-radius: 14px;
+  background: rgba(0, 0, 0, 0.28);
+}
+
+.seg {
+  padding: 10px 4px;
+  border: 0;
+  border-radius: 10px;
+  font-family: inherit;
+  font-size: 14px;
+  font-weight: 800;
+  color: var(--muted);
+  background: transparent;
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease, transform 0.08s ease;
+}
+
+.seg:hover { background: rgba(255, 255, 255, 0.08); }
+.seg:active { transform: scale(0.96); }
+
+.seg[aria-checked="true"] {
+  color: #23200a;
+  background: linear-gradient(180deg, #ffe27a, #ffb800);
+  box-shadow: 0 3px 0 #c98600;
+}
+
+.toggle {
+  min-width: 84px;
+  padding: 9px 14px;
+  border-radius: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  background: var(--panel);
+  color: var(--text);
+  font-family: inherit;
+  font-size: 14px;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.toggle[aria-pressed="true"] {
+  color: #23200a;
+  background: linear-gradient(180deg, #ffe27a, #ffb800);
+  border-color: transparent;
 }
 
 .primary-btn {

@@ -7,7 +7,7 @@
 <title>BlockBreak — ブロックパズル</title>
 <!-- __BUILD_SHA__ / __BUILT_AT__ は公開ワークフローが実際の値に置き換える。
      ローカルではプレースホルダのまま残り、「dev」と表示される。 -->
-<meta name="app-version" content="1.5.0">
+<meta name="app-version" content="1.6.0">
 <meta name="build-sha" content="__BUILD_SHA__">
 <meta name="build-at" content="__BUILT_AT__">
 <!-- 更新したのに古いままにならないよう、コミットごとに URL を変える -->
@@ -29,11 +29,13 @@
         <button class="icon-btn" id="sound-btn" type="button" title="サウンド" aria-label="サウンド切り替え">
           <span id="sound-icon">🔊</span>
         </button>
+        <button class="icon-btn" id="settings-btn" type="button" title="せってい" aria-label="せってい">⚙</button>
         <button class="icon-btn" id="restart-btn" type="button" title="やり直す" aria-label="やり直す">↻</button>
       </div>
     </header>
 
     <div class="level">
+      <span class="level__diff" id="difficulty-chip">Normal</span>
       <span class="level__name">レベル <b id="level">1</b></span>
       <div class="level__bar" id="level-bar" role="progressbar"
            aria-label="つぎのレベルまでに消すライン" aria-valuemin="0" aria-valuemax="10" aria-valuenow="0">
@@ -61,6 +63,29 @@
   <p class="sr-only" id="status" role="status" aria-live="polite"></p>
 
   <div class="drag-layer" id="drag-layer" aria-hidden="true"></div>
+
+  <div class="overlay" id="settings" hidden>
+    <div class="panel" role="dialog" aria-modal="true" aria-labelledby="settings-title">
+      <h1 class="panel__title" id="settings-title">せってい</h1>
+
+      <div class="setting">
+        <h2 class="setting__name">むずかしさ</h2>
+        <div class="segmented" id="difficulty" role="radiogroup" aria-label="むずかしさ">
+          <button type="button" class="seg" role="radio" data-difficulty="easy" aria-checked="false">Easy</button>
+          <button type="button" class="seg" role="radio" data-difficulty="normal" aria-checked="true">Normal</button>
+          <button type="button" class="seg" role="radio" data-difficulty="hard" aria-checked="false">Hard</button>
+        </div>
+        <p class="setting__desc" id="difficulty-desc"></p>
+      </div>
+
+      <div class="setting setting--row">
+        <h2 class="setting__name">サウンド</h2>
+        <button type="button" class="toggle" id="sound-toggle" aria-pressed="true">オン</button>
+      </div>
+
+      <button class="primary-btn" id="settings-close" type="button">とじる</button>
+    </div>
+  </div>
 
   <div class="overlay" id="overlay" hidden>
     <div class="panel">
