@@ -112,14 +112,14 @@
       lines: 15,
       perfect: 100,
       help: 100,
-      desc: 'ぴったりのピースがいつも来ます。消せるピースも必ず配られます。レベルは 15 本ごと。',
+      desc: 'そろいかけた列があれば、ぴったりのピースが必ず来ます。レベルは 15 本ごと。',
     },
     normal: {
       label: 'Normal',
       lines: 10,
-      perfect: 70,
-      help: 40,
-      desc: 'そろえかけた列が 2 本あると、ぴったりのピースがよく来ます。レベルは 10 本ごと。',
+      perfect: 85,
+      help: 60,
+      desc: 'そろいかけた列があると、ぴったりのピースがよく来ます。レベルは 10 本ごと。',
     },
     hard: {
       label: 'Hard',
@@ -153,14 +153,17 @@
   const HELP_RETRIES = 20;
 
   /* ぴったりピース。
-   * 「あと 2〜3 マスで消える列」が 2 本以上あるとき、そのすき間に
-   * ちょうど入る棒を最大 2 つまで配る。自分でそろえかけた人への
-   * ごほうびなので、1 本しか作れていないときは発動しない。
-   * 1 マスのすき間は誰でも埋められるので対象外。 */
-  const GAP_MIN = 2;      // すき間の長さの下限
-  const GAP_MAX = 3;      // すき間の長さの上限
-  const GAPS_REQUIRED = 2; // 何本そろいかけていたら発動するか
-  const PERFECT_MAX = 2;   // 1 回の配札で入れる最大数
+   * 「あと 1〜4 マスで消える列」があるとき、そのすき間にちょうど入る
+   * 棒を最大 3 つまで配る。そろいかけた列が複数あれば、それぞれに
+   * 向けた棒が来るので、続けて消してコンボを伸ばせる。 */
+  const GAP_MIN = 1;      // すき間の長さの下限
+  const GAP_MAX = 4;      // すき間の長さの上限
+  const GAPS_REQUIRED = 1; // 何本そろいかけていたら発動するか
+  const PERFECT_MAX = 3;   // 1 回の配札で入れる最大数
+
+  /* 消去演出。置いた場所から順に弾けるよう、マスごとに遅らせる。 */
+  const MAX_CLEAR_DELAY = 90;   // 遅らせる上限（ms）
+  const CLEAR_DURATION = 360;   // 演出が終わって次の一手を受け付けるまで（ms）
   const SMALL_AT_LEVEL_1 = 50;
   const MEDIUM_SHARE = 35;
   const SHIFT_PER_LEVEL = 4;
@@ -594,6 +597,32 @@
     showCombo.timer = setTimeout(() => el.combo.classList.remove('show'), big ? 1600 : 1100);
   }
 
+  /** 消えた行・列に光の帯を走らせる。 */
+  function flashLines(rows, cols) {
+    const m = boardMetrics();
+    const boardRect = el.board.getBoundingClientRect();
+    const span = SIZE * m.step - (m.step - m.size);
+    const left = m.x - boardRect.left;
+    const top = m.y - boardRect.top;
+
+    const beam = (className, style) => {
+      const node = document.createElement('div');
+      node.className = className;
+      Object.assign(node.style, style);
+      el.fx.appendChild(node);
+      setTimeout(() => node.remove(), 600);
+    };
+
+    rows.forEach((r) => beam('line-flash line-flash--row', {
+      left: `${left}px`, top: `${top + r * m.step}px`,
+      width: `${span}px`, height: `${m.size}px`,
+    }));
+    cols.forEach((c) => beam('line-flash line-flash--col', {
+      left: `${left + c * m.step}px`, top: `${top}px`,
+      width: `${m.size}px`, height: `${span}px`,
+    }));
+  }
+
   function popScore(points, row, col) {
     const m = boardMetrics();
     const boardRect = el.board.getBoundingClientRect();
@@ -782,11 +811,15 @@
     // 盤面の状態はここで即座に更新し、演出だけを後回しにする。
     // 消えたはずのラインが state.grid に残っていると、次の一手が
     // 同じラインを二重に消したものと判定してしまうため。
+    // 置いた場所から遠いマスほど遅らせて、そこから弾けるように見せる。
     targets.forEach((k) => {
       const [r, c] = k.split(',').map(Number);
+      const distance = Math.abs(r - anchorRow) + Math.abs(c - anchorCol);
       state.grid[r][c] = null;
+      cellEls[r][c].style.setProperty('--clear-delay', `${Math.min(distance * 14, MAX_CLEAR_DELAY)}ms`);
       cellEls[r][c].classList.add('clearing');
     });
+    flashLines(rows, cols);
 
     // ライン 1 本 50 点 + コンボボーナス（20 点から 10 点ずつ増える）。
     const points = lineCount * LINE_POINTS + COMBO_BASE + (state.combo - 1) * COMBO_STEP;
@@ -813,8 +846,11 @@
     }
 
     if (lineCount >= 2 || state.combo >= 2) {
+      // まとめて消すほど、連鎖が続くほど大きく揺らす。
+      const strength = Math.min(lineCount + Math.max(0, state.combo - 1), 6);
+      el.board.style.setProperty('--shake', `${3 + strength}px`);
       el.board.classList.add('shake');
-      setTimeout(() => el.board.classList.remove('shake'), 300);
+      setTimeout(() => el.board.classList.remove('shake'), 320);
     }
 
     sound.clear(lineCount, state.combo);
@@ -828,12 +864,13 @@
       targets.forEach((k) => {
         const [r, c] = k.split(',').map(Number);
         cellEls[r][c].classList.remove('clearing');
+        cellEls[r][c].style.removeProperty('--clear-delay');
       });
       state.busy = false;
       renderBoard();
       if (perfect) celebrateAllClear();
       finishTurn();
-    }, 260);
+    }, CLEAR_DURATION);
   }
 
   /** 消去演出の予約を取り消し、演出用のクラスを片付ける。 */
@@ -987,8 +1024,8 @@
       }
     }
 
-    // 2. ぴったりピース。そろいかけた列が 2 本以上あるときだけ、
-    //    別々のすき間に合う棒を最大 2 つまで混ぜる。
+    // 2. ぴったりピース。そろいかけた列があれば、
+    //    別々のすき間に合う棒を最大 3 つまで混ぜる。
     //    行どうしなら 1 本消しても他の行は崩れないので、連鎖が狙える。
     const gaps = nearlyCompleteGaps();
     if (gaps.length >= GAPS_REQUIRED) {

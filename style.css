@@ -277,15 +277,52 @@ body {
   box-shadow: inset 0 0 0 2px rgba(255, 90, 90, 0.5);
 }
 
+/* 置いた場所から順に弾ける。遅れは JS が --clear-delay で渡す。 */
 .cell.clearing {
-  animation: burst 0.28s ease-out forwards;
+  animation: burst 0.26s cubic-bezier(0.34, 1.4, 0.64, 1) forwards;
+  animation-delay: var(--clear-delay, 0ms);
   z-index: 2;
 }
 
 @keyframes burst {
-  0%   { transform: scale(1); filter: brightness(1); }
-  35%  { transform: scale(1.22); filter: brightness(2.2); }
-  100% { transform: scale(0.1); filter: brightness(2.6); opacity: 0; }
+  0%   { transform: scale(1) rotate(0deg); filter: brightness(1); }
+  30%  { transform: scale(1.3) rotate(-6deg); filter: brightness(2.6) saturate(1.6); }
+  60%  { transform: scale(1.1) rotate(4deg); filter: brightness(3); }
+  100% { transform: scale(0) rotate(14deg); filter: brightness(3.4); opacity: 0; }
+}
+
+/* 消えた行・列を光の帯が走る。 */
+.line-flash {
+  position: absolute;
+  border-radius: 8px;
+  pointer-events: none;
+  z-index: 1;
+  background: linear-gradient(90deg,
+    rgba(255, 255, 255, 0) 0%,
+    rgba(255, 252, 235, 0.95) 45%,
+    rgba(255, 255, 255, 0) 100%);
+  box-shadow: 0 0 22px rgba(255, 240, 190, 0.75);
+  animation: beamRow 0.5s ease-out forwards;
+}
+
+.line-flash--col {
+  background: linear-gradient(180deg,
+    rgba(255, 255, 255, 0) 0%,
+    rgba(255, 252, 235, 0.95) 45%,
+    rgba(255, 255, 255, 0) 100%);
+  animation-name: beamCol;
+}
+
+@keyframes beamRow {
+  0%   { opacity: 0; transform: scaleX(0.25); }
+  25%  { opacity: 1; transform: scaleX(1); }
+  100% { opacity: 0; transform: scaleX(1.08); filter: blur(5px); }
+}
+
+@keyframes beamCol {
+  0%   { opacity: 0; transform: scaleY(0.25); }
+  25%  { opacity: 1; transform: scaleY(1); }
+  100% { opacity: 0; transform: scaleY(1.08); filter: blur(5px); }
 }
 
 /* ---------- 全消し演出 ---------- */
@@ -339,13 +376,15 @@ body {
   letter-spacing: 0.1em;
 }
 
-.board.shake { animation: shake 0.3s ease; }
+/* 揺れの大きさは消したライン数と連鎖で変わる（JS が --shake を渡す）。 */
+.board.shake { animation: shake 0.32s ease; }
 
 @keyframes shake {
-  0%, 100% { transform: translateX(0); }
-  25% { transform: translateX(-5px); }
-  50% { transform: translateX(5px); }
-  75% { transform: translateX(-3px); }
+  0%, 100% { transform: translate(0, 0); }
+  20% { transform: translate(calc(var(--shake, 5px) * -1), 2px); }
+  40% { transform: translate(var(--shake, 5px), -2px); }
+  60% { transform: translate(calc(var(--shake, 5px) * -0.6), 1px); }
+  80% { transform: translate(calc(var(--shake, 5px) * 0.4), 0); }
 }
 
 /* キーボード操作時のカーソル位置 */
