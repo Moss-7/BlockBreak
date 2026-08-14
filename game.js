@@ -91,21 +91,21 @@
   /* ------------------------------------------------------------------ *
    * 難易度（レベル）
    *
-   *   レベル = 消したライン ÷ 10 + 1（最大 10）
-   *   レベルが 1 上がるごとに、ちいさいピースが 4% 減って
-   *   おおきいピースが 4% 増える。ふつうのピースはいつも 35%。
+   *   レベル = 消したライン ÷ むずかしさごとの本数 + 1（最大 10）
+   *   レベルが 1 上がるごとに、ぴったりピースとおたすけが 5% ずつ減る。
    *
-   *   レベル 1 … ちいさい 50% / ふつう 35% / おおきい 15%
-   *   レベル10 … ちいさい 14% / ふつう 35% / おおきい 51%
+   *   ピースの大きさの配分はレベルによらず一定にしている。
+   *   大きいピースは一度に大きく消せて気持ちがいいので、
+   *   序盤から出るようにしたいため。
    * ------------------------------------------------------------------ */
 
   const MAX_LEVEL = 10;
 
-  /* むずかしさ。変わるのは「揃いやすさ」に効く 2 つだけ。
-   *   help  … 配られる 3 つに「いま消せるピース」が無いとき、
-   *           1 つを消せるピースに差し替える確率
-   *   lines … レベルが 1 つ上がるまでに消すライン数
-   *           （レベルが上がるほど大きいピースが増える） */
+  /* むずかしさ。変わるのは「そろえやすさ」に効く 3 つだけ。
+   *   perfect … そろいかけた列のすき間に合う棒を混ぜる確率
+   *   help    … 消せるピースが 1 つも無いときに差し替える確率
+   *   lines   … レベルが 1 つ上がるまでに消すライン数
+   * どちらの確率も、レベルが上がるごとに 5% ずつ下がる。 */
   const DIFFICULTIES = {
     easy: {
       label: 'Easy',
@@ -134,6 +134,13 @@
   const rules = () => DIFFICULTIES[state.difficulty] || DIFFICULTIES[DEFAULT_DIFFICULTY];
   const linesPerLevel = () => rules().lines;
 
+  /* レベルが上がるほど、ぴったりもおたすけも効きにくくなる。 */
+  const DECAY_PER_LEVEL = 5;
+  const withDecay = (base) =>
+    Math.max(0, base - (Math.min(state.level, MAX_LEVEL) - 1) * DECAY_PER_LEVEL);
+  const perfectChance = () => withDecay(rules().perfect);
+  const helpChance = () => withDecay(rules().help);
+
   /* スコア。本家の攻略情報に合わせ、コンボは「加算式」にしている。
    *   ライン 1 本 = 50 点
    *   コンボボーナス = 20 点 + コンボが 1 つ増えるごとに +10 点
@@ -161,12 +168,13 @@
   const GAPS_REQUIRED = 1; // 何本そろいかけていたら発動するか
   const PERFECT_MAX = 3;   // 1 回の配札で入れる最大数
 
+  /* ピースの大きさの配分（合計 100）。レベルでは変えない。
+   * 大きいピースは一度に大きく消せて気持ちがいいので、序盤から出す。 */
+  const SIZE_SHARES = { small: 35, medium: 35, large: 30 };
+
   /* 消去演出。置いた場所から順に弾けるよう、マスごとに遅らせる。 */
   const MAX_CLEAR_DELAY = 90;   // 遅らせる上限（ms）
   const CLEAR_DURATION = 360;   // 演出が終わって次の一手を受け付けるまで（ms）
-  const SMALL_AT_LEVEL_1 = 50;
-  const MEDIUM_SHARE = 35;
-  const SHIFT_PER_LEVEL = 4;
 
   /** ピースの大きさ区分。マス数だけで決まる。 */
   const sizeGroup = (piece) => {
@@ -183,16 +191,6 @@
     GROUP_WEIGHT[name] = list.reduce((sum, p) => sum + p.weight, 0);
   }
 
-  /** そのレベルでの、大きさ区分ごとの出現率（合計 100）。 */
-  function groupShares(level) {
-    const step = Math.min(level, MAX_LEVEL) - 1;
-    return {
-      small: SMALL_AT_LEVEL_1 - step * SHIFT_PER_LEVEL,
-      medium: MEDIUM_SHARE,
-      large: (100 - SMALL_AT_LEVEL_1 - MEDIUM_SHARE) + step * SHIFT_PER_LEVEL,
-    };
-  }
-
   /** 区分の中では、これまでどおり基本形の weight どおりに選ぶ。 */
   function pickFromGroup(name) {
     const list = GROUPS[name];
@@ -204,15 +202,14 @@
     return list[list.length - 1];
   }
 
-  /** レベルに応じた大きさの偏りでピースを 1 つ選ぶ。
+  /** 決められた配分でピースを 1 つ選ぶ。
    *  group を渡すと、その区分だけから選ぶ（ごほうびタイム用）。 */
   function randomPiece(group) {
     if (group) return pickFromGroup(group);
 
-    const shares = groupShares(state.level);
     let n = Math.random() * 100;
     for (const name of ['small', 'medium', 'large']) {
-      n -= shares[name];
+      n -= SIZE_SHARES[name];
       if (n <= 0) return pickFromGroup(name);
     }
     return pickFromGroup('large');
@@ -1033,14 +1030,14 @@
       let placed = 0;
       for (const gap of shuffled(gaps)) {
         if (placed >= PERFECT_MAX) break;
-        if (Math.random() * 100 >= rules().perfect) continue;
+        if (Math.random() * 100 >= perfectChance()) continue;
         const piece = barPiece(gap.length, gap.horizontal);
         if (piece) candidate[slots[placed++]] = piece;
       }
     }
 
     // 3. おたすけ。それでも消せるピースが 1 つも無いときの救済。
-    if (!candidate.some(canClearLine) && Math.random() * 100 < rules().help) {
+    if (!candidate.some(canClearLine) && Math.random() * 100 < helpChance()) {
       for (let attempt = 0; attempt < HELP_RETRIES; attempt++) {
         const piece = randomPiece(group);
         // 置ける数を減らさないよう、置き場所があるものだけを混ぜる。
