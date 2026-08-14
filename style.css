@@ -11,6 +11,22 @@
   --gap: 4px;
   --board-pad: 8px;
   --cols: 8;
+
+  /* 盤面とトレイの幅。画面の大きさに追従させる。
+     - 94vw … 横にはみ出さない
+     - (100vh - 150px) * 0.72 … 縦にも収める。トレイは盤面の
+       0.36 倍の高さになるので、画面から HUD ぶんを引いて
+       1 / 1.36 ≒ 0.72 を掛けている
+     - max(440px, 84vmin) … スマホでは 440px を下限に、
+       タブレットなど大きい画面では画面に合わせて広げる
+     - 720px … 大きすぎて視線移動が増えないよう頭打ちにする */
+  --play-width: min(94vw, calc((100vh - 150px) * 0.72), max(440px, 84vmin), 720px);
+}
+
+@supports (height: 100dvh) {
+  :root {
+    --play-width: min(94vw, calc((100dvh - 150px) * 0.72), max(440px, 84vmin), 720px);
+  }
 }
 
 * { box-sizing: border-box; }
@@ -37,7 +53,7 @@ body {
 
 .app {
   height: 100%;
-  max-width: 520px;
+  max-width: min(96vw, 760px);
   margin: 0 auto;
   padding: max(10px, env(safe-area-inset-top)) 12px max(10px, env(safe-area-inset-bottom));
   display: flex;
@@ -209,10 +225,7 @@ body {
 
 .board-wrap {
   position: relative;
-  /* 幅だけでなく高さでも上限を決める。低い画面で盤面がはみ出し、
-     トレイが画面外に押し出されて操作できなくなるのを防ぐ。 */
-  width: min(94vw, 440px, calc(100vh - 300px));
-  width: min(94vw, 440px, calc(100dvh - 300px));
+  width: var(--play-width);
   flex: 0 0 auto;
 }
 
@@ -426,13 +439,16 @@ body {
 /* ---------- Tray ---------- */
 
 .tray {
-  width: min(94vw, 440px);
+  width: var(--play-width);
   display: grid;
   grid-template-columns: repeat(3, 1fr);
   align-items: center;
   justify-items: center;
   gap: 6px;
-  min-height: 116px;
+  /* 盤面が大きくなればピースも大きくなるので、置き場所も広げる。
+     いちばん背の高いピース（5 マス）が、盤面のマスの 0.6 倍ほどで
+     描けるだけの高さを確保する。 */
+  min-height: calc(var(--play-width) * 0.36);
   padding: 6px 4px;
   touch-action: none;
 }
@@ -442,7 +458,7 @@ body {
   place-items: center;
   width: 100%;
   height: 100%;
-  min-height: 104px;
+  min-height: calc(var(--play-width) * 0.34);
 }
 
 .piece {
@@ -493,6 +509,22 @@ body {
   display: grid;
   gap: var(--gap);
   filter: drop-shadow(0 10px 16px rgba(0, 0, 0, 0.45));
+}
+
+/* 画面が大きいときは、盤面に対して文字が小さく見えないよう合わせる。 */
+@media (min-width: 700px) {
+  .stat__value { font-size: 28px; }
+  .stat--score .stat__value { font-size: 46px; }
+  .stat__label { font-size: 13px; }
+  .icon-btn { width: 44px; height: 44px; font-size: 20px; border-radius: 14px; }
+  .level { font-size: 14px; }
+  .level__name b { font-size: 18px; }
+  .level__diff { font-size: 13px; padding: 3px 10px; }
+  .level__bar { height: 10px; }
+  .combo { font-size: 20px; min-height: 34px; }
+  .combo.big { font-size: 26px; }
+  .bonus, .hint { font-size: 14px; }
+  .build { font-size: 12px; }
 }
 
 /* ---------- Focus / screen reader ---------- */
