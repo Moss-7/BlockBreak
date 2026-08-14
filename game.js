@@ -164,12 +164,10 @@
   const UNIQUE_RETRIES = 30;
 
   /* ぴったりピース。
-   * 「あと 1〜4 マスで消える列」があるとき、そのすき間にちょうど入る
-   * 棒を最大 3 つまで配る。そろいかけた列が複数あれば、それぞれに
-   * 向けた棒が来るので、続けて消してコンボを伸ばせる。 */
-  const GAP_MIN = 1;      // すき間の長さの下限
-  const GAP_MAX = 4;      // すき間の長さの上限
-  const GAPS_REQUIRED = 1; // 何本そろいかけていたら発動するか
+   * 「置いたらラインが消えるピース」を配る。棒にかぎらず、四角でも
+   * L 字でも対象。まるごと消えるピースがあれば、それを優先する。
+   * 1 つ選ぶたびに、それを置いて消したあとの盤面で次を探すので、
+   * 続けて置いて連鎖できる組み合わせになる。 */
   const PERFECT_MAX = 3;   // 1 回の配札で入れる最大数
 
   /* ピースの大きさの配分（合計 100）。レベルでは変えない。
@@ -190,21 +188,19 @@
   const GROUPS = { small: [], medium: [], large: [] };
   PIECES.forEach((piece) => GROUPS[sizeGroup(piece)].push(piece));
 
-  const GROUP_WEIGHT = {};
-  for (const [name, list] of Object.entries(GROUPS)) {
-    GROUP_WEIGHT[name] = list.reduce((sum, p) => sum + p.weight, 0);
-  }
-
-  /** 区分の中では、これまでどおり基本形の weight どおりに選ぶ。 */
-  function pickFromGroup(name) {
-    const list = GROUPS[name];
-    let n = Math.random() * GROUP_WEIGHT[name];
+  /** 基本形の weight どおりに 1 つ選ぶ。 */
+  function pickWeighted(list) {
+    const total = list.reduce((sum, piece) => sum + piece.weight, 0);
+    let n = Math.random() * total;
     for (const piece of list) {
       n -= piece.weight;
       if (n <= 0) return piece;
     }
     return list[list.length - 1];
   }
+
+  /** 区分の中では、これまでどおり基本形の weight どおりに選ぶ。 */
+  const pickFromGroup = (name) => pickWeighted(GROUPS[name]);
 
   /** 決められた配分でピースを 1 つ選ぶ。
    *  group を渡すと、その区分だけから選ぶ（ごほうびタイム用）。 */
@@ -381,9 +377,9 @@
   }
 
   /** 盤面に置いた結果、揃う行・列を返す（実際には置かない）。 */
-  function linesAfterPlacing(piece, row, col) {
+  function linesAfterPlacing(piece, row, col, grid = state.grid) {
     const filled = new Set(piece.cells.map(([dr, dc]) => `${row + dr},${col + dc}`));
-    const isFilled = (r, c) => Boolean(state.grid[r][c]) || filled.has(`${r},${c}`);
+    const isFilled = (r, c) => Boolean(grid[r][c]) || filled.has(`${r},${c}`);
 
     const rows = [];
     const cols = [];
@@ -957,34 +953,36 @@
     }
   }
 
-  /** 「あと少しで消える列」のすき間を集める。
-   *  空きが GAP_MIN〜GAP_MAX マスで、それがひと続きになっている行・列だけ。
-   *  ひと続きなので、同じ長さの棒を置けば必ずぴったり埋まって消える。 */
-  function nearlyCompleteGaps() {
-    const gaps = [];
-    const scan = (horizontal) => {
-      for (let a = 0; a < SIZE; a++) {
-        const empties = [];
-        for (let b = 0; b < SIZE; b++) {
-          const filled = horizontal ? state.grid[a][b] : state.grid[b][a];
-          if (!filled) empties.push(b);
-        }
-        const length = empties.length;
-        if (length < GAP_MIN || length > GAP_MAX) continue;
-        if (empties[length - 1] - empties[0] !== length - 1) continue;  // 飛び飛びは対象外
-        gaps.push({ horizontal, length });
+  /** そのピースでラインを消せる置き方のうち、いちばん「ぴったり」なもの。
+   *  ぴったりの度合いは、置いたあとに盤面へ残るマスの数で測る。
+   *  0 なら、そのピースは置いた瞬間にまるごと消える。
+   *  棒にかぎらず、四角でも L 字でも同じように扱う。 */
+  function bestClearingPlacement(piece, grid = state.grid) {
+    let best = null;
+    for (let r = 0; r <= SIZE - piece.rows; r++) {
+      for (let c = 0; c <= SIZE - piece.cols; c++) {
+        if (!canPlaceAt(piece, r, c, grid)) continue;
+        const { rows, cols } = linesAfterPlacing(piece, r, c, grid);
+        if (!rows.length && !cols.length) continue;
+        const rowSet = new Set(rows);
+        const colSet = new Set(cols);
+        const leftover = piece.cells
+          .filter(([dr, dc]) => !rowSet.has(r + dr) && !colSet.has(c + dc)).length;
+        if (!best || leftover < best.leftover) best = { row: r, col: c, rows, cols, leftover };
+        if (leftover === 0) return best;   // これ以上ぴったりにはならない
       }
-    };
-    scan(true);
-    scan(false);
-    return gaps;
+    }
+    return best;
   }
 
-  /** 長さと向きがぴったり合う棒のピース。 */
-  function barPiece(length, horizontal) {
-    return PIECES.find((piece) => piece.cells.length === length && (horizontal
-      ? piece.rows === 1 && piece.cols === length
-      : piece.cols === 1 && piece.rows === length));
+  /** その置き方を実行して、消えたあとの盤面を返す（元の盤面は変えない）。
+   *  残ったマスもそのまま反映するので、次のピースを探す土台になる。 */
+  function afterPlacing(grid, piece, spot) {
+    const next = grid.map((row) => row.slice());
+    piece.cells.forEach(([dr, dc]) => { next[spot.row + dr][spot.col + dc] = 1; });
+    spot.rows.forEach((r) => { for (let c = 0; c < SIZE; c++) next[r][c] = null; });
+    spot.cols.forEach((c) => { for (let r = 0; r < SIZE; r++) next[r][c] = null; });
+    return next;
   }
 
   /** そのピースを置いてラインを消せる場所があるか。 */
@@ -1038,24 +1036,29 @@
       }
     }
 
-    // 2. ぴったりピース。そろいかけた列があれば、
-    //    別々のすき間に合う棒を最大 3 つまで混ぜる。
-    //    行どうしなら 1 本消しても他の行は崩れないので、連鎖が狙える。
-    const gaps = nearlyCompleteGaps();
-    if (gaps.length >= GAPS_REQUIRED) {
-      const slots = shuffled([0, 1, 2]);
-      let placed = 0;
-      for (const gap of shuffled(gaps)) {
-        if (placed >= PERFECT_MAX) break;
-        if (Math.random() * 100 >= perfectChance()) continue;
-        const piece = barPiece(gap.length, gap.horizontal);
-        if (!piece) continue;
-        const slot = slots[placed];
-        // 長さのおなじすき間が 2 本あっても、同じ棒を 2 つ入れない。
-        if (candidate.some((other, i) => other === piece && i !== slot)) continue;
-        candidate[slot] = piece;
-        placed++;
-      }
+    const slots = shuffled([0, 1, 2]);
+
+    // 2. ぴったりピース。まるごと消える置き方があるピースを最大 3 つまで。
+    //    1 つ選ぶたびに「それを置いて消したあとの盤面」で次を探すので、
+    //    続けて置けば連鎖する組み合わせになる。
+    let preview = state.grid;
+    for (let placed = 0; placed < PERFECT_MAX; placed++) {
+      if (Math.random() * 100 >= perfectChance()) continue;
+      const all = (group ? GROUPS[group] : PIECES)
+        .map((piece) => ({
+          piece,
+          spot: candidate.includes(piece) ? null : bestClearingPlacement(piece, preview),
+        }))
+        .filter((entry) => entry.spot);
+      if (!all.length) break;
+
+      // まるごと消えるピースがあれば、そちらを優先する。
+      const exact = all.filter((entry) => entry.spot.leftover === 0);
+      const pool = exact.length ? exact : all;
+
+      const piece = pickWeighted(pool.map((entry) => entry.piece));
+      candidate[slots[placed]] = piece;
+      preview = afterPlacing(preview, piece, pool.find((entry) => entry.piece === piece).spot);
     }
 
     // 3. おたすけ。それでも消せるピースが 1 つも無いときの救済。
