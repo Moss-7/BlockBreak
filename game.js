@@ -159,6 +159,10 @@
   /* おたすけの引き直し回数。確率はむずかしさごとに決まる。 */
   const HELP_RETRIES = 20;
 
+  /* 同じ形が 2 つ以上並ばないようにするための引き直し回数。
+   * 向きがちがえば別の形として扱う（見た目がちがうので）。 */
+  const UNIQUE_RETRIES = 30;
+
   /* ぴったりピース。
    * 「あと 1〜4 マスで消える列」があるとき、そのすき間にちょうど入る
    * 棒を最大 3 つまで配る。そろいかけた列が複数あれば、それぞれに
@@ -1006,7 +1010,20 @@
     state.bonusTray = state.bonusNext;
     state.bonusNext = false;
 
-    const deal = () => [randomPiece(group), randomPiece(group), randomPiece(group)];
+    /** すでに選んだものと同じ形にならないよう引き直して 1 つ選ぶ。 */
+    const pickUnique = (chosen) => {
+      for (let attempt = 0; attempt < UNIQUE_RETRIES; attempt++) {
+        const piece = randomPiece(group);
+        if (!chosen.includes(piece)) return piece;
+      }
+      return randomPiece(group);   // どうしても見つからなければ諦める
+    };
+
+    const deal = () => {
+      const out = [];
+      while (out.length < 3) out.push(pickUnique(out));
+      return out;
+    };
     const fitCount = (list) => list.filter((piece) => hasAnyPlacement(piece)).length;
 
     // 1. できるだけ 3 つとも置ける組み合わせを選ぶ。
@@ -1032,19 +1049,25 @@
         if (placed >= PERFECT_MAX) break;
         if (Math.random() * 100 >= perfectChance()) continue;
         const piece = barPiece(gap.length, gap.horizontal);
-        if (piece) candidate[slots[placed++]] = piece;
+        if (!piece) continue;
+        const slot = slots[placed];
+        // 長さのおなじすき間が 2 本あっても、同じ棒を 2 つ入れない。
+        if (candidate.some((other, i) => other === piece && i !== slot)) continue;
+        candidate[slot] = piece;
+        placed++;
       }
     }
 
     // 3. おたすけ。それでも消せるピースが 1 つも無いときの救済。
     if (!candidate.some(canClearLine) && Math.random() * 100 < helpChance()) {
+      const slot = Math.floor(Math.random() * candidate.length);
       for (let attempt = 0; attempt < HELP_RETRIES; attempt++) {
         const piece = randomPiece(group);
         // 置ける数を減らさないよう、置き場所があるものだけを混ぜる。
-        if (hasAnyPlacement(piece) && canClearLine(piece)) {
-          candidate[Math.floor(Math.random() * candidate.length)] = piece;
-          break;
-        }
+        if (!hasAnyPlacement(piece) || !canClearLine(piece)) continue;
+        if (candidate.some((other, i) => other === piece && i !== slot)) continue;
+        candidate[slot] = piece;
+        break;
       }
     }
 
