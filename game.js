@@ -110,20 +110,23 @@
     easy: {
       label: 'Easy',
       lines: 15,
-      help: () => 100,
-      desc: '消せるピースがいつも配られます。レベルは 15 本ごと。',
+      perfect: 100,
+      help: 100,
+      desc: 'ぴったりのピースがいつも来ます。消せるピースも必ず配られます。レベルは 15 本ごと。',
     },
     normal: {
       label: 'Normal',
       lines: 10,
-      help: (level) => Math.max(0, 100 - (Math.min(level, MAX_LEVEL) - 1) * 10),
-      desc: '消せるピースが配られやすいですが、レベルが上がるほど減ります。レベルは 10 本ごと。',
+      perfect: 70,
+      help: 40,
+      desc: 'そろえかけた列が 2 本あると、ぴったりのピースがよく来ます。レベルは 10 本ごと。',
     },
     hard: {
       label: 'Hard',
       lines: 6,
-      help: () => 0,
-      desc: 'おたすけはありません。自分で消せる形を作ります。レベルは 6 本ごと。',
+      perfect: 50,
+      help: 0,
+      desc: 'ぴったりは半分の確率。おたすけはありません。レベルは 6 本ごと。',
     },
   };
   const DEFAULT_DIFFICULTY = 'normal';
@@ -148,6 +151,16 @@
 
   /* おたすけの引き直し回数。確率はむずかしさごとに決まる。 */
   const HELP_RETRIES = 20;
+
+  /* ぴったりピース。
+   * 「あと 2〜3 マスで消える列」が 2 本以上あるとき、そのすき間に
+   * ちょうど入る棒を最大 2 つまで配る。自分でそろえかけた人への
+   * ごほうびなので、1 本しか作れていないときは発動しない。
+   * 1 マスのすき間は誰でも埋められるので対象外。 */
+  const GAP_MIN = 2;      // すき間の長さの下限
+  const GAP_MAX = 3;      // すき間の長さの上限
+  const GAPS_REQUIRED = 2; // 何本そろいかけていたら発動するか
+  const PERFECT_MAX = 2;   // 1 回の配札で入れる最大数
   const SMALL_AT_LEVEL_1 = 50;
   const MEDIUM_SHARE = 35;
   const SHIFT_PER_LEVEL = 4;
@@ -564,6 +577,15 @@
     el.soundToggle.setAttribute('aria-pressed', String(sound.on));
   }
 
+  /** 連鎖が伸びるほど景気のいい言葉にする。 */
+  function comboWord(combo) {
+    if (combo >= 8) return '🔥 UNSTOPPABLE';
+    if (combo >= 6) return '⚡ AMAZING';
+    if (combo >= 4) return '✨ GREAT';
+    if (combo >= 3) return 'NICE';
+    return '';
+  }
+
   function showCombo(text, big) {
     el.combo.textContent = text;
     el.combo.classList.add('show');
@@ -680,7 +702,9 @@
       this.seq([523, 659, 784, 988, 1175].slice(0, Math.min(lineCount, 5)),
         { step: 0.07, dur: 0.2, type: 'triangle', gain: 0.055 });
       if (combo >= 2) {
-        this.tone({ freq: 1568, dur: 0.22, type: 'triangle', gain: 0.045, delay: 0.14 });
+        // 連鎖が伸びるほど高く鳴らして、続いている感じを出す。
+        const freq = Math.min(1568 * Math.pow(1.06, combo - 2), 3200);
+        this.tone({ freq, dur: 0.22, type: 'triangle', gain: 0.045, delay: 0.14 });
       }
     },
 
@@ -782,9 +806,10 @@
       sound.levelUp();
     } else if (lineCount >= 2 || state.combo >= 2) {
       const parts = [];
-      if (state.combo >= 2) parts.push(`${state.combo} COMBO!`);
+      if (state.combo >= 2) parts.push(`${comboWord(state.combo)} ${state.combo} COMBO!`.trim());
       if (lineCount >= 2) parts.push(`${lineCount} LINES!`);
-      showCombo(parts.join('  '));
+      // 3 連鎖からは大きく出して、続いていることが分かるようにする。
+      showCombo(parts.join('  '), state.combo >= 3);
     }
 
     if (lineCount >= 2 || state.combo >= 2) {
@@ -825,6 +850,12 @@
   }
 
   const isBoardEmpty = () => state.grid.every((row) => row.every((cell) => !cell));
+
+  /** 配列をシャッフルした新しい配列を返す。 */
+  const shuffled = (list) => list
+    .map((value) => ({ value, sort: Math.random() }))
+    .sort((a, b) => a.sort - b.sort)
+    .map(({ value }) => value);
 
   /** 全消し（盤面が空になった）ときのご褒美。
    *  ボーナス点に加えて、次に配る 3 つをちいさいピースにする。 */
@@ -888,6 +919,36 @@
     }
   }
 
+  /** 「あと少しで消える列」のすき間を集める。
+   *  空きが GAP_MIN〜GAP_MAX マスで、それがひと続きになっている行・列だけ。
+   *  ひと続きなので、同じ長さの棒を置けば必ずぴったり埋まって消える。 */
+  function nearlyCompleteGaps() {
+    const gaps = [];
+    const scan = (horizontal) => {
+      for (let a = 0; a < SIZE; a++) {
+        const empties = [];
+        for (let b = 0; b < SIZE; b++) {
+          const filled = horizontal ? state.grid[a][b] : state.grid[b][a];
+          if (!filled) empties.push(b);
+        }
+        const length = empties.length;
+        if (length < GAP_MIN || length > GAP_MAX) continue;
+        if (empties[length - 1] - empties[0] !== length - 1) continue;  // 飛び飛びは対象外
+        gaps.push({ horizontal, length });
+      }
+    };
+    scan(true);
+    scan(false);
+    return gaps;
+  }
+
+  /** 長さと向きがぴったり合う棒のピース。 */
+  function barPiece(length, horizontal) {
+    return PIECES.find((piece) => piece.cells.length === length && (horizontal
+      ? piece.rows === 1 && piece.cols === length
+      : piece.cols === 1 && piece.rows === length));
+  }
+
   /** そのピースを置いてラインを消せる場所があるか。 */
   function canClearLine(piece) {
     for (let r = 0; r <= SIZE - piece.rows; r++) {
@@ -914,6 +975,7 @@
     const deal = () => [randomPiece(group), randomPiece(group), randomPiece(group)];
     const fitCount = (list) => list.filter((piece) => hasAnyPlacement(piece)).length;
 
+    // 1. できるだけ 3 つとも置ける組み合わせを選ぶ。
     let candidate = deal();
     let fits = fitCount(candidate);
     for (let attempt = 0; attempt < REFILL_RETRIES && fits < 3; attempt++) {
@@ -925,7 +987,23 @@
       }
     }
 
-    if (!candidate.some(canClearLine) && Math.random() * 100 < rules().help(state.level)) {
+    // 2. ぴったりピース。そろいかけた列が 2 本以上あるときだけ、
+    //    別々のすき間に合う棒を最大 2 つまで混ぜる。
+    //    行どうしなら 1 本消しても他の行は崩れないので、連鎖が狙える。
+    const gaps = nearlyCompleteGaps();
+    if (gaps.length >= GAPS_REQUIRED) {
+      const slots = shuffled([0, 1, 2]);
+      let placed = 0;
+      for (const gap of shuffled(gaps)) {
+        if (placed >= PERFECT_MAX) break;
+        if (Math.random() * 100 >= rules().perfect) continue;
+        const piece = barPiece(gap.length, gap.horizontal);
+        if (piece) candidate[slots[placed++]] = piece;
+      }
+    }
+
+    // 3. おたすけ。それでも消せるピースが 1 つも無いときの救済。
+    if (!candidate.some(canClearLine) && Math.random() * 100 < rules().help) {
       for (let attempt = 0; attempt < HELP_RETRIES; attempt++) {
         const piece = randomPiece(group);
         // 置ける数を減らさないよう、置き場所があるものだけを混ぜる。
